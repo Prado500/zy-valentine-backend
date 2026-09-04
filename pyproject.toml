@@ -1,0 +1,45 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "zy-valentine-backend"
+version = "0.1.0"
+description = "API RESTful asíncrona para la gestión de cartas para san valentín"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi",
+    "uvicorn[standard]",
+    "sqlalchemy",
+    "asyncpg",
+    "alembic",
+    "pydantic[email]",
+    "pydantic-settings",
+    "python-multipart",
+    "bcrypt",
+    "pyjwt",
+    "python-dotenv",
+    "fastapi-mail>=1.4.1",
+    "azure-storage-blob[aio]",
+    "aiohttp"
+
+]
+
+[project.optional-dependencies]
+test = [
+    "pytest>=8.4.1",
+    "pytest-asyncio>=0.25.0",
+    "httpx>=0.28.1",
+    "aiosqlite"
+]
+
+[tool.pytest.ini_options]
+pythonpath = "."
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["app*"]

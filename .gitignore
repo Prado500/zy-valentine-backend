@@ -1,0 +1,20 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+*.pyc
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+venv/
+.venv/
+
+# Environment variables
+.env
+
+# IDE-related directories and files
+.idea/
+.vscode/
+.azure-pipelines
