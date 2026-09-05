@@ -17,4 +17,3 @@ venv/
 # IDE-related directories and files
 .idea/
 .vscode/
-.azure-pipelines
