@@ -21,3 +21,7 @@ postman/local-results.json
 # IDE-related directories and files
 .idea/
 .vscode/
+
+#Docs
+Iops.md
+docs/AZURECONF.md
