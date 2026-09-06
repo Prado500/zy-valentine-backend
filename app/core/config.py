@@ -14,6 +14,58 @@ from app.core.dsn import DsnError, split_ssl_query, strongest
 LEGACY_UNUSED_VARIABLES = ("JWT_SECRET_KEY", "ALGORITHM", "ACCESS_TOKEN_EXPIRE_MINUTES")
 
 
+def resolve_database_url(raw_url: str, app_env: str, configured_mode: str) -> tuple[str, str]:
+    """Valida la URL y devuelve (url_sin_query, modo_tls_definitivo).
+
+    Compartida por la configuración completa de la aplicación y por la
+    configuración reducida de migraciones, para que ambas apliquen exactamente
+    las mismas reglas de TLS.
+    """
+    try:
+        clean_url, url_ssl_mode = split_ssl_query(raw_url, app_env)
+    except DsnError as error:
+        raise ValueError(str(error)) from None
+    try:
+        url = make_url(clean_url)
+    except Exception:
+        raise ValueError("DATABASE_URL must be a valid PostgreSQL URL") from None
+    if url.drivername != "postgresql+asyncpg" or not url.host or not url.database:
+        raise ValueError("DATABASE_URL must use postgresql+asyncpg with host and database")
+    if url.query:
+        raise ValueError("Use DB_SSL_MODE/DB_SSL_CA_FILE instead of URL query parameters")
+    return clean_url, strongest(configured_mode, url_ssl_mode)
+
+
+class MigrationSettings(BaseSettings):
+    """Configuración mínima para ejecutar `alembic upgrade` en un contenedor.
+
+    Una migración solo necesita llegar a la base de datos: no atiende peticiones,
+    no emite cookies, no sube fotos ni envía correo. Exigirle `SESSION_SECRET`,
+    `CORS_ORIGINS` o el almacenamiento de Azure obligaría a inyectar secretos que
+    no usa. Las reglas de TLS son **las mismas** que en `Settings`.
+    """
+
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore", hide_input_in_errors=True)
+    app_env: Literal["local", "develop", "staging", "production"] = "local"
+    database_url: SecretStr
+    db_ssl_mode: Literal["disable", "verify-full"] = "disable"
+    db_ssl_ca_file: str | None = None
+    db_pool_size: int = Field(default=1, ge=1, le=20)
+    db_max_overflow: int = Field(default=0, ge=0, le=20)
+    db_pool_timeout: int = Field(default=10, ge=1, le=60)
+
+    @model_validator(mode="after")
+    def validate_runtime(self):
+        clean_url, ssl_mode = resolve_database_url(
+            self.database_url.get_secret_value(), self.app_env, self.db_ssl_mode
+        )
+        self.database_url = SecretStr(clean_url)
+        self.db_ssl_mode = ssl_mode
+        if self.app_env != "local" and self.db_ssl_mode != "verify-full":
+            raise ValueError("Remote environments require verified TLS for migrations")
+        return self
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore", hide_input_in_errors=True)
 
@@ -82,23 +134,12 @@ class Settings(BaseSettings):
     def validate_runtime(self):
         if len(self.session_secret.get_secret_value()) < 32:
             raise ValueError("SESSION_SECRET must contain at least 32 characters")
-        try:
-            clean_url, url_ssl_mode = split_ssl_query(
-                self.database_url.get_secret_value(), self.app_env
-            )
-        except DsnError as error:
-            raise ValueError(str(error)) from None
-        try:
-            url = make_url(clean_url)
-        except Exception:
-            raise ValueError("DATABASE_URL must be a valid PostgreSQL URL") from None
-        if url.drivername != "postgresql+asyncpg" or not url.host or not url.database:
-            raise ValueError("DATABASE_URL must use postgresql+asyncpg with host and database")
-        if url.query:
-            raise ValueError("Use DB_SSL_MODE/DB_SSL_CA_FILE instead of URL query parameters")
         # La URL almacenada queda sin query; TLS vive en DB_SSL_MODE y nunca se degrada.
+        clean_url, ssl_mode = resolve_database_url(
+            self.database_url.get_secret_value(), self.app_env, self.db_ssl_mode
+        )
         self.database_url = SecretStr(clean_url)
-        self.db_ssl_mode = strongest(self.db_ssl_mode, url_ssl_mode)
+        self.db_ssl_mode = ssl_mode
 
         if not self.cors_origins:
             raise ValueError("CORS_ORIGINS cannot be empty")
@@ -180,3 +221,8 @@ def _validate_origin(origin: str, field: str) -> None:
 @lru_cache
 def get_settings() -> Settings:
     return Settings()
+
+
+@lru_cache
+def get_migration_settings() -> MigrationSettings:
+    return MigrationSettings()

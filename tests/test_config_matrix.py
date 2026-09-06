@@ -9,7 +9,7 @@ eleva a verificación completa y que nunca degrada TLS fuera de local.
 import pytest
 from pydantic import ValidationError
 
-from app.core.config import LEGACY_UNUSED_VARIABLES, Settings
+from app.core.config import LEGACY_UNUSED_VARIABLES, MigrationSettings, Settings
 from app.core.dsn import DsnError, split_ssl_query
 
 BASE = "postgresql+asyncpg://user:pass@srv.postgres.database.azure.com:5432/db_zv_develop"
@@ -170,3 +170,42 @@ async def test_api_never_returns_a_bearer_token(client, buyer):
     body = response.json()
     assert not any("token" in key.lower() for key in body)
     assert "HttpOnly" in response.headers["set-cookie"]
+
+
+# --- Configuración reducida de migraciones (pipeline de CD) --------------------------------
+
+
+def test_migrations_only_need_the_database_url(monkeypatch):
+    """El CD ejecuta `alembic upgrade` con solo DATABASE_URL en el contenedor.
+
+    Una migración no atiende peticiones ni emite cookies: exigirle SESSION_SECRET,
+    CORS_ORIGINS o el almacenamiento de Azure obligaría a inyectar secretos que no usa.
+    """
+    for name in ("SESSION_SECRET", "CORS_ORIGINS", "STORAGE_BACKEND", "APP_ENV"):
+        monkeypatch.delenv(name, raising=False)
+    config = MigrationSettings(_env_file=None, database_url=f"{BASE}?ssl=require")
+    assert config.db_ssl_mode == "verify-full"
+    assert "?" not in config.database_url.get_secret_value()
+
+
+@pytest.mark.parametrize("query", ["sslmode=require", "ssl=require", "sslmode=verify-full"])
+def test_migrations_upgrade_azure_tls(query):
+    """El CD reescribe `sslmode=` a `ssl=`; ambas formas llegan a TLS verificado."""
+    config = MigrationSettings(_env_file=None, database_url=f"{BASE}?{query}", app_env="develop")
+    assert config.db_ssl_mode == "verify-full"
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"database_url": f"{BASE}?sslmode=disable"},
+        {"database_url": f"{BASE}?options=-csearch_path%3Dx"},
+        {"database_url": "sqlite+aiosqlite:///:memory:"},
+        # URL sin TLS y DB_SSL_MODE=disable: nada eleva el modo, así que se rechaza.
+        {"database_url": BASE, "db_ssl_mode": "disable"},
+    ],
+)
+def test_migrations_never_degrade_tls_outside_local(changes):
+    payload = {"database_url": f"{BASE}?ssl=require", "app_env": "develop", **changes}
+    with pytest.raises(ValidationError):
+        MigrationSettings(_env_file=None, **payload)

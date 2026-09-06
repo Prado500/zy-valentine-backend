@@ -2,10 +2,10 @@ import ssl
 
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
 
-from app.core.config import Settings
+from app.core.config import MigrationSettings, Settings
 
 
-def create_engine(settings: Settings) -> AsyncEngine:
+def create_engine(settings: Settings | MigrationSettings) -> AsyncEngine:
     tls = (
         ssl.create_default_context(cafile=settings.db_ssl_ca_file)
         if settings.db_ssl_mode == "verify-full"

@@ -643,7 +643,27 @@ alembic upgrade head
 ```
 
 Nunca se ejecuta al arrancar la aplicación, y hay que lanzarla **una sola vez por
-entorno**, no una por worker. Antes de aplicarla sobre una base existente, revisa el
+entorno**, no una por worker.
+
+**`MigrationSettings` (`app/core/config.py`).** Alembic no usa `Settings`, sino una
+configuración reducida que solo pide `DATABASE_URL`. El motivo es operativo: el pipeline
+de CD ejecuta la migración en un contenedor efímero con
+
+```bash
+docker run --rm -e DATABASE_URL="$FIXED_URL" imagen:tag alembic upgrade head
+```
+
+y una migración no atiende peticiones, no emite cookies, no sube fotos ni envía correo.
+Exigirle `SESSION_SECRET`, `CORS_ORIGINS` o el almacenamiento de Azure obligaría a
+inyectar secretos que no usa. **Las reglas de TLS son idénticas**: ambas clases llaman a
+`resolve_database_url`, así que una URL con `?sslmode=disable` en un entorno remoto sigue
+abortando también en la migración.
+
+El CD reescribe `sslmode=` a `ssl=` antes de pasar la URL; da igual, el parser acepta las
+dos formas y las eleva a `verify-full`. Conviene añadir `-e APP_ENV=develop` (o el
+entorno que toque) al `docker run`: sin él, `APP_ENV` cae a `local` y la migración
+aceptaría una URL sin TLS si alguien la configurara así. Con las cadenas actuales de
+Azure, que traen `require`, el TLS queda verificado igualmente. Antes de aplicarla sobre una base existente, revisa el
 esquema con su responsable: `0001` crea `users` y `auth_sessions`, y `0002` las siete
 tablas del dominio comercial. No uses `stamp` para tapar un conflicto.
 

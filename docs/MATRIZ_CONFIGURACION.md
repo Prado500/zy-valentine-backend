@@ -152,3 +152,22 @@ la cifra de 8190 usuarios de `Iops.md`, que además es un límite del balanceado
 8. Ejecutar `alembic upgrade head` una sola vez por entorno, mediante el proceso
    autorizado, tras revisar el estado de la base con su responsable. **Este trabajo no
    ejecutó migraciones contra Azure.**
+
+## 7. Nota sobre el pipeline de CD
+
+El paso de migración del CD ejecuta, dentro de un contenedor efímero:
+
+```bash
+FIXED_URL="${MAPPED_DB_URL//sslmode=/ssl=}"
+docker run --rm -e DATABASE_URL="$FIXED_URL" imagen:tag alembic upgrade head
+```
+
+Funciona con este backend: Alembic usa `MigrationSettings`, que solo exige
+`DATABASE_URL` y aplica exactamente las mismas reglas de TLS que la aplicación completa.
+La reescritura de `sslmode=` a `ssl=` es innecesaria pero inofensiva: el parser acepta
+ambas formas y las eleva a `verify-full`.
+
+Recomendación menor: añadir `-e APP_ENV=develop` (o `staging`/`production`) al
+`docker run`. Sin esa variable, `APP_ENV` cae a `local` y la migración aceptaría una URL
+sin TLS si alguien la configurara así. Con las cadenas actuales, que llevan `require`, el
+TLS se verifica de todos modos.

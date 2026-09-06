@@ -12,7 +12,7 @@ pool:
 
 variables:
 
-  dockerRegistryServiceConnection: 'SC-DR-ECOTUR'
+  dockerRegistryServiceConnection: 'SC-DR-ZV'
   imageRepository: 'daldeoscoder/zv-backend'
   containerRegistry: 'index.docker.io'
   dockerfilePath: '**/Dockerfile'
@@ -51,7 +51,7 @@ stages:
       - deployment: DeployDev
         environment: 'Development'
         variables:
-          - group: 'VG-ECOTUR-DEV'
+          - group: 'VG-ZV-DEV'
         strategy:
           runOnce:
             deploy:
@@ -80,7 +80,7 @@ stages:
       - deployment: DeployStg
         environment: 'Staging'
         variables:
-          - group: 'VG-ECOTUR-STG'
+          - group: 'VG-ZV-STG'
         strategy:
           runOnce:
             deploy:
@@ -109,7 +109,7 @@ stages:
       - deployment: DeployMain
         environment: 'Production'
         variables:
-          - group: 'VG-ECOTUR-MAIN'
+          - group: 'VG-ZV-MAIN'
         strategy:
           runOnce:
             deploy:

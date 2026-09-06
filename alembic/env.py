@@ -2,7 +2,7 @@ import asyncio
 from logging.config import fileConfig
 
 from alembic import context
-from app.core.config import get_settings
+from app.core.config import get_migration_settings
 from app.db.database import create_engine
 from app.models.base import Base
 from app.models.commerce import (  # noqa: F401
@@ -24,7 +24,7 @@ target_metadata = Base.metadata
 
 def run_offline():
     context.configure(
-        url=get_settings().database_url.get_secret_value(),
+        url=get_migration_settings().database_url.get_secret_value(),
         target_metadata=target_metadata,
         literal_binds=True,
         compare_type=True,
@@ -40,7 +40,7 @@ def run_sync(connection):
 
 
 async def run_online():
-    engine = create_engine(get_settings())
+    engine = create_engine(get_migration_settings())
     try:
         async with engine.connect() as connection:
             await connection.run_sync(run_sync)
