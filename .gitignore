@@ -10,6 +10,10 @@ wheels/
 # Virtual environments
 venv/
 .venv/
+.local-validation/
+.pytest_cache/
+.ruff_cache/
+postman/local-results.json
 
 # Environment variables
 .env

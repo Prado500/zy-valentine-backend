@@ -4,25 +4,23 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "zy-valentine-backend"
-version = "0.1.0"
+version = "0.2.0"
 description = "API RESTful asíncrona para la gestión de cartas para san valentín"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
-    "fastapi",
-    "uvicorn[standard]",
-    "sqlalchemy",
-    "asyncpg",
-    "alembic",
-    "pydantic[email]",
-    "pydantic-settings",
-    "python-multipart",
-    "bcrypt",
-    "pyjwt",
-    "python-dotenv",
-    "fastapi-mail>=1.4.1",
-    "azure-storage-blob[aio]",
-    "aiohttp"
+    "fastapi>=0.115,<1",
+    "uvicorn>=0.30,<1",
+    "sqlalchemy>=2.0,<2.1",
+    "asyncpg>=0.29,<1",
+    "alembic>=1.13,<2",
+    "pydantic[email]>=2.8,<3",
+    "pydantic-settings>=2.4,<3",
+    "pwdlib[argon2]>=0.2,<1",
+    "itsdangerous>=2.2,<3",
+    "google-auth>=2.35,<3",
+    "requests>=2.32,<3",
+    "cachecontrol>=0.14,<1"
 
 ]
 
@@ -31,7 +29,7 @@ test = [
     "pytest>=8.4.1",
     "pytest-asyncio>=0.25.0",
     "httpx>=0.28.1",
-    "aiosqlite"
+    "ruff>=0.12,<1"
 ]
 
 [tool.pytest.ini_options]
@@ -43,3 +41,11 @@ asyncio_default_fixture_loop_scope = "function"
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["app*"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I", "UP", "B"]
+ignore = ["B008"] # FastAPI dependency declarations intentionally use Depends().

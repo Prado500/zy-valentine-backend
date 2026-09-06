@@ -1,42 +1,37 @@
-version: '3.8'
-
+# Local only. Never use an Azure DATABASE_URL in this Compose project.
+name: zyvalentine-local
 services:
-
-  api:
-    build: .
-    container_name: zy_valentine_backend_api
-    ports:
-      - "8000:8000"
-    environment:
-      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
-      - JWT_SECRET_KEY=${JWT_SECRET_KEY}
-      - ALGORITHM=${ALGORITHM:-HS256}
-      - ACCESS_TOKEN_EXPIRE_MINUTES=${ACCESS_TOKEN_EXPIRE_MINUTES:-30}
-    depends_on:
-      - db
-    networks:
-      - zy_valentine_backend_network
-
-
   db:
     image: postgres:15-alpine
-    container_name: zy_valentine_backend_postgres
-    restart: always
     environment:
-      POSTGRES_USER: ${POSTGRES_USER:-postgres}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-admin123}
-      POSTGRES_DB: ${POSTGRES_DB:-zy_valentine_backend_db}
-    ports:
-      - "5432:5432"
+      POSTGRES_USER: zy_local
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set a local-only POSTGRES_PASSWORD}
+      POSTGRES_DB: zyvalentine
     volumes:
-      - postgres_data:/var/lib/postgresql/data
-    networks:
-      - zy_valentine_backend_network
-
+      - local_pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U zy_local -d zyvalentine"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+  api:
+    build: .
+    ports:
+      - "127.0.0.1:8000:8000"
+    environment:
+      APP_ENV: local
+      DATABASE_URL: postgresql+asyncpg://zy_local:${POSTGRES_PASSWORD}@db:5432/zyvalentine
+      SESSION_SECRET: ${SESSION_SECRET:?Set SESSION_SECRET}
+      CORS_ORIGINS: '${CORS_ORIGINS:-["http://localhost:5173"]}'
+      DB_SSL_MODE: disable
+      WEB_CONCURRENCY: 1
+      APP_REPLICAS: 1
+      DB_POOL_SIZE: 2
+      DB_MAX_OVERFLOW: 0
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+    depends_on:
+      db:
+        condition: service_healthy
+# No migration is run automatically on container/API startup.
 volumes:
-  postgres_data:
-    name: zy_valentine_backend_pg_data
-
-networks:
-  zy_valentine_backend_network:
-    driver: bridge
+  local_pg_data:
