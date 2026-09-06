@@ -21,4 +21,3 @@ postman/local-results.json
 # IDE-related directories and files
 .idea/
 .vscode/
-.azure-pipelines
