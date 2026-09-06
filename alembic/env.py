@@ -5,6 +5,15 @@ from alembic import context
 from app.core.config import get_settings
 from app.db.database import create_engine
 from app.models.base import Base
+from app.models.commerce import (  # noqa: F401
+    Letter,
+    LetterDelivery,
+    LetterPhoto,
+    Payment,
+    PaymentEvent,
+    Purchase,
+    UserIdentityDocument,
+)
 from app.models.user import AuthSession, User  # noqa: F401
 
 config = context.config

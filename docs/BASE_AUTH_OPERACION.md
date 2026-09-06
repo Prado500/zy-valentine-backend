@@ -2,6 +2,14 @@
 
 Propuesta de configuración, no despliegue verificado. No modifica pipelines ni el archivo Iops.md del compañero.
 
+> **Actualizado el 2026-09-06.** Este documento describe el corte base+auth (spec 001).
+> Las secciones de variables y de exclusiones quedaron superadas por el corte 002:
+> la matriz completa de variables está en [MATRIZ_CONFIGURACION.md](MATRIZ_CONFIGURACION.md)
+> y el dominio comercial (compras, pagos, cartas, fotos, QR y correo), que aquí figura
+> como excluido, está implementado y descrito en [DOMINIO_COMERCIAL.md](DOMINIO_COMERCIAL.md).
+> Lo que sigue vigente sin cambios: sesiones opacas sin JWT, presupuesto de conexiones,
+> migración ejecutada una sola vez por proceso autorizado y los puntos de handoff.
+
 ## Datos conocidos y lo que falta
 
 Iops.md declara presupuesto de 20 conexiones en una instancia limitada, 240 IOPS y un máximo de usuarios impuesto por balanceador. No aporta nombres de servidores, DSN, certificados, secretos, número de réplicas ni variables del pipeline. Un paso de negocio no equivale a una operación física de disco; no se validó ese dimensionamiento ni “12 peticiones” simultáneas por conexión.

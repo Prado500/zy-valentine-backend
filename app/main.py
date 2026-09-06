@@ -11,12 +11,17 @@ from sqlalchemy.exc import SQLAlchemyError
 from starlette.exceptions import HTTPException
 
 from app.api.routers.auth import router
+from app.api.routers.commerce import public_router, webhook_router
+from app.api.routers.commerce import router as commerce_router
 from app.core.config import Settings, get_settings
 from app.core.security import RateLimiter
 from app.db.database import create_engine, session_factory
 from app.services.google import GoogleVerifier
+from app.services.mailer import build_mailer
+from app.services.payments import build_gateway
+from app.services.storage import build_storage
 
-EXPECTED_REVISION = "0001_base_auth"
+EXPECTED_REVISION = "0002_commerce"
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -29,13 +34,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.hash_limiter = CapacityLimiter(2)
         app.state.google_limiter = CapacityLimiter(1)
         app.state.google_verifier = GoogleVerifier()
+        app.state.payments = build_gateway(settings)
+        app.state.storage = build_storage(settings)
+        app.state.mailer = build_mailer(settings)
         try:
             yield
         finally:
             app.state.google_verifier.close()
+            await app.state.payments.aclose()
             await app.state.engine.dispose()
 
-    app = FastAPI(title="Zyvencore Valentine API", version="0.2.0", lifespan=lifespan)
+    app = FastAPI(title="Zyvencore Valentine API", version="0.3.0", lifespan=lifespan)
     app.state.settings = settings
     app.state.rate_limiter = RateLimiter(settings.auth_rate_limit, settings.auth_rate_window)
 
@@ -104,11 +113,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return {"status": "ready"}
 
     app.include_router(router)
+    app.include_router(commerce_router)
+    app.include_router(public_router)
+    app.include_router(webhook_router)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_origins,
         allow_credentials=True,
-        allow_methods=["GET", "POST"],
+        allow_methods=["GET", "POST", "PATCH", "PUT", "DELETE"],
         allow_headers=["Content-Type", "X-CSRF-Token"],
     )
     return app

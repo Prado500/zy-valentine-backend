@@ -1,531 +1,1517 @@
 {
-  "info": {
-    "name": "Zyvencore base + auth",
-    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
-    "description": "Only use a disposable local DB. Automated folder requires Google disabled. Cookie jar must be enabled. No real identity data."
-  },
-  "event": [
+ "info": {
+  "name": "Zyvencore base + auth + comercio",
+  "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+  "description": "Solo base local desechable. La carpeta 'Automated local' y 'Commerce local' no requieren Google, Mercado Pago, Azure ni correo reales. Habilitar el cookie jar. Nunca guardar datos de identidad reales ni secretos en el entorno."
+ },
+ "event": [
+  {
+   "listen": "prerequest",
+   "script": {
+    "type": "text/javascript",
+    "exec": [
+     "if (!pm.environment.get(\"email\")) { pm.environment.set(\"email\", \"postman-\" + Date.now() + \"@example.com\"); pm.environment.set(\"password\", \"Local-only-\" + pm.variables.replaceIn(\"{{$guid}}\")); }",
+     "if (!pm.environment.get(\"idempotencyKey\")) { pm.environment.set(\"idempotencyKey\", \"pm-\" + Date.now()); }"
+    ]
+   }
+  }
+ ],
+ "item": [
+  {
+   "name": "Automated local",
+   "item": [
     {
-      "listen": "prerequest",
-      "script": {
+     "name": "Liveness",
+     "request": {
+      "method": "GET",
+      "header": [],
+      "url": "{{baseUrl}}/health/live"
+     },
+     "event": [
+      {
+       "listen": "test",
+       "script": {
         "type": "text/javascript",
         "exec": [
-          "if (!pm.environment.get(\"email\")) { pm.environment.set(\"email\", \"postman-\" + Date.now() + \"@example.com\"); pm.environment.set(\"password\", \"Local-only-\" + pm.variables.replaceIn(\"{{$guid}}\")); }"
+         "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));"
         ]
+       }
       }
-    }
-  ],
-  "item": [
-    {
-      "name": "Automated local",
-      "item": [
-        {
-          "name": "Liveness",
-          "request": {
-            "method": "GET",
-            "header": [],
-            "url": "{{baseUrl}}/health/live"
-          },
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));"
-                ]
-              }
-            }
-          ]
-        },
-        {
-          "name": "Readiness",
-          "request": {
-            "method": "GET",
-            "header": [],
-            "url": "{{baseUrl}}/health/ready"
-          },
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));"
-                ]
-              }
-            }
-          ]
-        },
-        {
-          "name": "Get CSRF",
-          "request": {
-            "method": "GET",
-            "header": [],
-            "url": "{{baseUrl}}/api/v1/auth/csrf"
-          },
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
-                  "pm.environment.set(\"csrfToken\", pm.response.json().csrfToken);",
-                  "pm.test(\"CSRF present\", () => pm.expect(pm.environment.get(\"csrfToken\")).to.be.a(\"string\"));"
-                ]
-              }
-            }
-          ]
-        },
-        {
-          "name": "Reject missing CSRF",
-          "request": {
-            "method": "POST",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
-            "url": "{{baseUrl}}/api/v1/auth/register",
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"email\": \"{{email}}\",\n  \"password\": \"{{password}}\",\n  \"name\": \"Postman Local\"\n}",
-              "options": {
-                "raw": {
-                  "language": "json"
-                }
-              }
-            }
-          },
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test(\"HTTP 403\", () => pm.response.to.have.status(403));"
-                ]
-              }
-            }
-          ]
-        },
-        {
-          "name": "Reject invalid registration",
-          "request": {
-            "method": "POST",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              },
-              {
-                "key": "X-CSRF-Token",
-                "value": "{{csrfToken}}"
-              }
-            ],
-            "url": "{{baseUrl}}/api/v1/auth/register",
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"email\": \"{{email}}\",\n  \"password\": \"short\",\n  \"name\": \"Postman Local\"\n}",
-              "options": {
-                "raw": {
-                  "language": "json"
-                }
-              }
-            }
-          },
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test(\"HTTP 422\", () => pm.response.to.have.status(422));"
-                ]
-              }
-            }
-          ]
-        },
-        {
-          "name": "Register",
-          "request": {
-            "method": "POST",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              },
-              {
-                "key": "X-CSRF-Token",
-                "value": "{{csrfToken}}"
-              }
-            ],
-            "url": "{{baseUrl}}/api/v1/auth/register",
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"email\": \"{{email}}\",\n  \"password\": \"{{password}}\",\n  \"name\": \"Postman Local\"\n}",
-              "options": {
-                "raw": {
-                  "language": "json"
-                }
-              }
-            }
-          },
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test(\"HTTP 201\", () => pm.response.to.have.status(201));",
-                  "pm.environment.set(\"userId\", pm.response.json().id);",
-                  "pm.test(\"No private credentials\", () => { const b=pm.response.json(); pm.expect(b).not.to.have.property(\"password_hash\"); pm.expect(b.emailVerified).to.eql(false); });"
-                ]
-              }
-            }
-          ]
-        },
-        {
-          "name": "Reject duplicate",
-          "request": {
-            "method": "POST",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              },
-              {
-                "key": "X-CSRF-Token",
-                "value": "{{csrfToken}}"
-              }
-            ],
-            "url": "{{baseUrl}}/api/v1/auth/register",
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"email\": \"{{email}}\",\n  \"password\": \"{{password}}\",\n  \"name\": \"Postman Local\"\n}",
-              "options": {
-                "raw": {
-                  "language": "json"
-                }
-              }
-            }
-          },
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test(\"HTTP 409\", () => pm.response.to.have.status(409));"
-                ]
-              }
-            }
-          ]
-        },
-        {
-          "name": "Reject wrong password",
-          "request": {
-            "method": "POST",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              },
-              {
-                "key": "X-CSRF-Token",
-                "value": "{{csrfToken}}"
-              }
-            ],
-            "url": "{{baseUrl}}/api/v1/auth/login",
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"email\": \"{{email}}\",\n  \"password\": \"wrong-password\"\n}",
-              "options": {
-                "raw": {
-                  "language": "json"
-                }
-              }
-            }
-          },
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test(\"HTTP 401\", () => pm.response.to.have.status(401));"
-                ]
-              }
-            }
-          ]
-        },
-        {
-          "name": "Login",
-          "request": {
-            "method": "POST",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              },
-              {
-                "key": "X-CSRF-Token",
-                "value": "{{csrfToken}}"
-              }
-            ],
-            "url": "{{baseUrl}}/api/v1/auth/login",
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"email\": \"{{email}}\",\n  \"password\": \"{{password}}\"\n}",
-              "options": {
-                "raw": {
-                  "language": "json"
-                }
-              }
-            }
-          },
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
-                  "pm.test(\"Same user\", () => pm.expect(pm.response.json().id).to.eql(pm.environment.get(\"userId\")));",
-                  "pm.test(\"HttpOnly session\", () => pm.expect(pm.response.headers.get(\"Set-Cookie\")).to.include(\"HttpOnly\"));"
-                ]
-              }
-            }
-          ]
-        },
-        {
-          "name": "Own profile",
-          "request": {
-            "method": "GET",
-            "header": [],
-            "url": "{{baseUrl}}/api/v1/me"
-          },
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
-                  "pm.test(\"Own identity\", () => pm.expect(pm.response.json().id).to.eql(pm.environment.get(\"userId\")));"
-                ]
-              }
-            }
-          ]
-        },
-        {
-          "name": "Google not configured locally",
-          "request": {
-            "method": "POST",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              },
-              {
-                "key": "X-CSRF-Token",
-                "value": "{{csrfToken}}"
-              }
-            ],
-            "url": "{{baseUrl}}/api/v1/auth/google",
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"credential\": \"invalid-local-token\"\n}",
-              "options": {
-                "raw": {
-                  "language": "json"
-                }
-              }
-            }
-          },
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test(\"HTTP 503\", () => pm.response.to.have.status(503));",
-                  "pm.test(\"Explicit configuration limit\", () => pm.expect(pm.response.json().code).to.eql(\"GOOGLE_NOT_CONFIGURED\"));"
-                ]
-              }
-            }
-          ]
-        },
-        {
-          "name": "Logout",
-          "request": {
-            "method": "POST",
-            "header": [
-              {
-                "key": "X-CSRF-Token",
-                "value": "{{csrfToken}}"
-              }
-            ],
-            "url": "{{baseUrl}}/api/v1/auth/logout"
-          },
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));"
-                ]
-              }
-            }
-          ]
-        },
-        {
-          "name": "Profile denied after logout",
-          "request": {
-            "method": "GET",
-            "header": [],
-            "url": "{{baseUrl}}/api/v1/me"
-          },
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test(\"HTTP 401\", () => pm.response.to.have.status(401));"
-                ]
-              }
-            }
-          ]
-        },
-        {
-          "name": "Logout repeated",
-          "request": {
-            "method": "POST",
-            "header": [
-              {
-                "key": "X-CSRF-Token",
-                "value": "{{csrfToken}}"
-              }
-            ],
-            "url": "{{baseUrl}}/api/v1/auth/logout"
-          },
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));"
-                ]
-              }
-            }
-          ]
-        }
-      ]
+     ]
     },
     {
-      "name": "Google manual (configured only)",
-      "description": "Obtain CSRF first. In GIS callback flow set nonce to csrfToken and obtain a fresh ID credential for configured audience. Paste token locally, never export/save secrets. Manual success not part of automatic run.",
-      "item": [
-        {
-          "name": "Google invalid token",
-          "request": {
-            "method": "POST",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              },
-              {
-                "key": "X-CSRF-Token",
-                "value": "{{csrfToken}}"
-              }
-            ],
-            "url": "{{baseUrl}}/api/v1/auth/google",
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"credential\": \"invalid\"\n}",
-              "options": {
-                "raw": {
-                  "language": "json"
-                }
-              }
-            }
-          },
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test(\"HTTP 401\", () => pm.response.to.have.status(401));"
-                ]
-              }
-            }
-          ]
-        },
-        {
-          "name": "Google valid credential",
-          "request": {
-            "method": "POST",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              },
-              {
-                "key": "X-CSRF-Token",
-                "value": "{{csrfToken}}"
-              }
-            ],
-            "url": "{{baseUrl}}/api/v1/auth/google",
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"credential\": \"{{googleCredential}}\"\n}",
-              "options": {
-                "raw": {
-                  "language": "json"
-                }
-              }
-            }
-          },
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
-                  "pm.test(\"Verified account\", () => pm.expect(pm.response.json().emailVerified).to.eql(true));"
-                ]
-              }
-            }
-          ]
-        },
-        {
-          "name": "Google profile",
-          "request": {
-            "method": "GET",
-            "header": [],
-            "url": "{{baseUrl}}/api/v1/me"
-          },
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "type": "text/javascript",
-                "exec": [
-                  "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));"
-                ]
-              }
-            }
-          ]
+     "name": "Readiness",
+     "request": {
+      "method": "GET",
+      "header": [],
+      "url": "{{baseUrl}}/health/ready"
+     },
+     "event": [
+      {
+       "listen": "test",
+       "script": {
+        "type": "text/javascript",
+        "exec": [
+         "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));"
+        ]
+       }
+      }
+     ]
+    },
+    {
+     "name": "Get CSRF",
+     "request": {
+      "method": "GET",
+      "header": [],
+      "url": "{{baseUrl}}/api/v1/auth/csrf"
+     },
+     "event": [
+      {
+       "listen": "test",
+       "script": {
+        "type": "text/javascript",
+        "exec": [
+         "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+         "pm.environment.set(\"csrfToken\", pm.response.json().csrfToken);",
+         "pm.test(\"CSRF present\", () => pm.expect(pm.environment.get(\"csrfToken\")).to.be.a(\"string\"));"
+        ]
+       }
+      }
+     ]
+    },
+    {
+     "name": "Reject missing CSRF",
+     "request": {
+      "method": "POST",
+      "header": [
+       {
+        "key": "Content-Type",
+        "value": "application/json"
+       }
+      ],
+      "url": "{{baseUrl}}/api/v1/auth/register",
+      "body": {
+       "mode": "raw",
+       "raw": "{\n  \"email\": \"{{email}}\",\n  \"password\": \"{{password}}\",\n  \"name\": \"Postman Local\"\n}",
+       "options": {
+        "raw": {
+         "language": "json"
         }
-      ]
+       }
+      }
+     },
+     "event": [
+      {
+       "listen": "test",
+       "script": {
+        "type": "text/javascript",
+        "exec": [
+         "pm.test(\"HTTP 403\", () => pm.response.to.have.status(403));"
+        ]
+       }
+      }
+     ]
+    },
+    {
+     "name": "Reject invalid registration",
+     "request": {
+      "method": "POST",
+      "header": [
+       {
+        "key": "Content-Type",
+        "value": "application/json"
+       },
+       {
+        "key": "X-CSRF-Token",
+        "value": "{{csrfToken}}"
+       }
+      ],
+      "url": "{{baseUrl}}/api/v1/auth/register",
+      "body": {
+       "mode": "raw",
+       "raw": "{\n  \"email\": \"{{email}}\",\n  \"password\": \"short\",\n  \"name\": \"Postman Local\"\n}",
+       "options": {
+        "raw": {
+         "language": "json"
+        }
+       }
+      }
+     },
+     "event": [
+      {
+       "listen": "test",
+       "script": {
+        "type": "text/javascript",
+        "exec": [
+         "pm.test(\"HTTP 422\", () => pm.response.to.have.status(422));"
+        ]
+       }
+      }
+     ]
+    },
+    {
+     "name": "Register",
+     "request": {
+      "method": "POST",
+      "header": [
+       {
+        "key": "Content-Type",
+        "value": "application/json"
+       },
+       {
+        "key": "X-CSRF-Token",
+        "value": "{{csrfToken}}"
+       }
+      ],
+      "url": "{{baseUrl}}/api/v1/auth/register",
+      "body": {
+       "mode": "raw",
+       "raw": "{\n  \"email\": \"{{email}}\",\n  \"password\": \"{{password}}\",\n  \"name\": \"Postman Local\"\n}",
+       "options": {
+        "raw": {
+         "language": "json"
+        }
+       }
+      }
+     },
+     "event": [
+      {
+       "listen": "test",
+       "script": {
+        "type": "text/javascript",
+        "exec": [
+         "pm.test(\"HTTP 201\", () => pm.response.to.have.status(201));",
+         "pm.environment.set(\"userId\", pm.response.json().id);",
+         "pm.test(\"No private credentials\", () => { const b=pm.response.json(); pm.expect(b).not.to.have.property(\"password_hash\"); pm.expect(b.emailVerified).to.eql(false); });"
+        ]
+       }
+      }
+     ]
+    },
+    {
+     "name": "Reject duplicate",
+     "request": {
+      "method": "POST",
+      "header": [
+       {
+        "key": "Content-Type",
+        "value": "application/json"
+       },
+       {
+        "key": "X-CSRF-Token",
+        "value": "{{csrfToken}}"
+       }
+      ],
+      "url": "{{baseUrl}}/api/v1/auth/register",
+      "body": {
+       "mode": "raw",
+       "raw": "{\n  \"email\": \"{{email}}\",\n  \"password\": \"{{password}}\",\n  \"name\": \"Postman Local\"\n}",
+       "options": {
+        "raw": {
+         "language": "json"
+        }
+       }
+      }
+     },
+     "event": [
+      {
+       "listen": "test",
+       "script": {
+        "type": "text/javascript",
+        "exec": [
+         "pm.test(\"HTTP 409\", () => pm.response.to.have.status(409));"
+        ]
+       }
+      }
+     ]
+    },
+    {
+     "name": "Reject wrong password",
+     "request": {
+      "method": "POST",
+      "header": [
+       {
+        "key": "Content-Type",
+        "value": "application/json"
+       },
+       {
+        "key": "X-CSRF-Token",
+        "value": "{{csrfToken}}"
+       }
+      ],
+      "url": "{{baseUrl}}/api/v1/auth/login",
+      "body": {
+       "mode": "raw",
+       "raw": "{\n  \"email\": \"{{email}}\",\n  \"password\": \"wrong-password\"\n}",
+       "options": {
+        "raw": {
+         "language": "json"
+        }
+       }
+      }
+     },
+     "event": [
+      {
+       "listen": "test",
+       "script": {
+        "type": "text/javascript",
+        "exec": [
+         "pm.test(\"HTTP 401\", () => pm.response.to.have.status(401));"
+        ]
+       }
+      }
+     ]
+    },
+    {
+     "name": "Login",
+     "request": {
+      "method": "POST",
+      "header": [
+       {
+        "key": "Content-Type",
+        "value": "application/json"
+       },
+       {
+        "key": "X-CSRF-Token",
+        "value": "{{csrfToken}}"
+       }
+      ],
+      "url": "{{baseUrl}}/api/v1/auth/login",
+      "body": {
+       "mode": "raw",
+       "raw": "{\n  \"email\": \"{{email}}\",\n  \"password\": \"{{password}}\"\n}",
+       "options": {
+        "raw": {
+         "language": "json"
+        }
+       }
+      }
+     },
+     "event": [
+      {
+       "listen": "test",
+       "script": {
+        "type": "text/javascript",
+        "exec": [
+         "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+         "pm.test(\"Same user\", () => pm.expect(pm.response.json().id).to.eql(pm.environment.get(\"userId\")));",
+         "pm.test(\"HttpOnly session\", () => pm.expect(pm.response.headers.get(\"Set-Cookie\")).to.include(\"HttpOnly\"));"
+        ]
+       }
+      }
+     ]
+    },
+    {
+     "name": "Own profile",
+     "request": {
+      "method": "GET",
+      "header": [],
+      "url": "{{baseUrl}}/api/v1/me"
+     },
+     "event": [
+      {
+       "listen": "test",
+       "script": {
+        "type": "text/javascript",
+        "exec": [
+         "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+         "pm.test(\"Own identity\", () => pm.expect(pm.response.json().id).to.eql(pm.environment.get(\"userId\")));"
+        ]
+       }
+      }
+     ]
+    },
+    {
+     "name": "Google not configured locally",
+     "request": {
+      "method": "POST",
+      "header": [
+       {
+        "key": "Content-Type",
+        "value": "application/json"
+       },
+       {
+        "key": "X-CSRF-Token",
+        "value": "{{csrfToken}}"
+       }
+      ],
+      "url": "{{baseUrl}}/api/v1/auth/google",
+      "body": {
+       "mode": "raw",
+       "raw": "{\n  \"credential\": \"invalid-local-token\"\n}",
+       "options": {
+        "raw": {
+         "language": "json"
+        }
+       }
+      }
+     },
+     "event": [
+      {
+       "listen": "test",
+       "script": {
+        "type": "text/javascript",
+        "exec": [
+         "pm.test(\"HTTP 503\", () => pm.response.to.have.status(503));",
+         "pm.test(\"Explicit configuration limit\", () => pm.expect(pm.response.json().code).to.eql(\"GOOGLE_NOT_CONFIGURED\"));"
+        ]
+       }
+      }
+     ]
+    },
+    {
+     "name": "Logout",
+     "request": {
+      "method": "POST",
+      "header": [
+       {
+        "key": "X-CSRF-Token",
+        "value": "{{csrfToken}}"
+       }
+      ],
+      "url": "{{baseUrl}}/api/v1/auth/logout"
+     },
+     "event": [
+      {
+       "listen": "test",
+       "script": {
+        "type": "text/javascript",
+        "exec": [
+         "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));"
+        ]
+       }
+      }
+     ]
+    },
+    {
+     "name": "Profile denied after logout",
+     "request": {
+      "method": "GET",
+      "header": [],
+      "url": "{{baseUrl}}/api/v1/me"
+     },
+     "event": [
+      {
+       "listen": "test",
+       "script": {
+        "type": "text/javascript",
+        "exec": [
+         "pm.test(\"HTTP 401\", () => pm.response.to.have.status(401));"
+        ]
+       }
+      }
+     ]
+    },
+    {
+     "name": "Logout repeated",
+     "request": {
+      "method": "POST",
+      "header": [
+       {
+        "key": "X-CSRF-Token",
+        "value": "{{csrfToken}}"
+       }
+      ],
+      "url": "{{baseUrl}}/api/v1/auth/logout"
+     },
+     "event": [
+      {
+       "listen": "test",
+       "script": {
+        "type": "text/javascript",
+        "exec": [
+         "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));"
+        ]
+       }
+      }
+     ]
     }
-  ]
+   ]
+  },
+  {
+   "name": "Google manual (configured only)",
+   "description": "Obtain CSRF first. In GIS callback flow set nonce to csrfToken and obtain a fresh ID credential for configured audience. Paste token locally, never export/save secrets. Manual success not part of automatic run.",
+   "item": [
+    {
+     "name": "Google invalid token",
+     "request": {
+      "method": "POST",
+      "header": [
+       {
+        "key": "Content-Type",
+        "value": "application/json"
+       },
+       {
+        "key": "X-CSRF-Token",
+        "value": "{{csrfToken}}"
+       }
+      ],
+      "url": "{{baseUrl}}/api/v1/auth/google",
+      "body": {
+       "mode": "raw",
+       "raw": "{\n  \"credential\": \"invalid\"\n}",
+       "options": {
+        "raw": {
+         "language": "json"
+        }
+       }
+      }
+     },
+     "event": [
+      {
+       "listen": "test",
+       "script": {
+        "type": "text/javascript",
+        "exec": [
+         "pm.test(\"HTTP 401\", () => pm.response.to.have.status(401));"
+        ]
+       }
+      }
+     ]
+    },
+    {
+     "name": "Google valid credential",
+     "request": {
+      "method": "POST",
+      "header": [
+       {
+        "key": "Content-Type",
+        "value": "application/json"
+       },
+       {
+        "key": "X-CSRF-Token",
+        "value": "{{csrfToken}}"
+       }
+      ],
+      "url": "{{baseUrl}}/api/v1/auth/google",
+      "body": {
+       "mode": "raw",
+       "raw": "{\n  \"credential\": \"{{googleCredential}}\"\n}",
+       "options": {
+        "raw": {
+         "language": "json"
+        }
+       }
+      }
+     },
+     "event": [
+      {
+       "listen": "test",
+       "script": {
+        "type": "text/javascript",
+        "exec": [
+         "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));",
+         "pm.test(\"Verified account\", () => pm.expect(pm.response.json().emailVerified).to.eql(true));"
+        ]
+       }
+      }
+     ]
+    },
+    {
+     "name": "Google profile",
+     "request": {
+      "method": "GET",
+      "header": [],
+      "url": "{{baseUrl}}/api/v1/me"
+     },
+     "event": [
+      {
+       "listen": "test",
+       "script": {
+        "type": "text/javascript",
+        "exec": [
+         "pm.test(\"HTTP 200\", () => pm.response.to.have.status(200));"
+        ]
+       }
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "name": "Commerce local",
+   "description": "Compras, cédula privada y límites sin proveedor de pagos configurado.",
+   "item": [
+    {
+     "name": "Get CSRF",
+     "event": [
+      {
+       "listen": "test",
+       "script": {
+        "type": "text/javascript",
+        "exec": [
+         "pm.test(\"200\", () => pm.response.to.have.status(200));",
+         "pm.environment.set(\"csrfToken\", pm.response.json().csrfToken);"
+        ]
+       }
+      }
+     ],
+     "request": {
+      "method": "GET",
+      "header": [],
+      "url": {
+       "raw": "{{baseUrl}}/api/v1/auth/csrf",
+       "host": [
+        "{{baseUrl}}"
+       ],
+       "path": [
+        "api",
+        "v1",
+        "auth",
+        "csrf"
+       ]
+      }
+     }
+    },
+    {
+     "name": "Register buyer",
+     "event": [
+      {
+       "listen": "prerequest",
+       "script": {
+        "type": "text/javascript",
+        "exec": [
+         "pm.environment.set(\"commerceEmail\", \"postman-commerce-\" + Date.now() + \"@example.com\");"
+        ]
+       }
+      },
+      {
+       "listen": "test",
+       "script": {
+        "type": "text/javascript",
+        "exec": [
+         "pm.test(\"201\", () => pm.response.to.have.status(201));"
+        ]
+       }
+      }
+     ],
+     "request": {
+      "method": "POST",
+      "header": [
+       {
+        "key": "Content-Type",
+        "value": "application/json"
+       },
+       {
+        "key": "X-CSRF-Token",
+        "value": "{{csrfToken}}"
+       }
+      ],
+      "url": {
+       "raw": "{{baseUrl}}/api/v1/auth/register",
+       "host": [
+        "{{baseUrl}}"
+       ],
+       "path": [
+        "api",
+        "v1",
+        "auth",
+        "register"
+       ]
+      },
+      "body": {
+       "mode": "raw",
+       "raw": "{\"email\": \"{{commerceEmail}}\", \"password\": \"{{password}}\", \"name\": \"Comprador Postman\"}"
+      }
+     }
+    },
+    {
+     "name": "Login",
+     "event": [
+      {
+       "listen": "test",
+       "script": {
+        "type": "text/javascript",
+        "exec": [
+         "pm.test(\"200\", () => pm.response.to.have.status(200));",
+         "pm.environment.set(\"userId\", pm.response.json().id);",
+         "pm.test(\"sin token bearer\", () => pm.expect(Object.keys(pm.response.json()).join(\",\")).to.not.include(\"token\"));"
+        ]
+       }
+      }
+     ],
+     "request": {
+      "method": "POST",
+      "header": [
+       {
+        "key": "Content-Type",
+        "value": "application/json"
+       },
+       {
+        "key": "X-CSRF-Token",
+        "value": "{{csrfToken}}"
+       }
+      ],
+      "url": {
+       "raw": "{{baseUrl}}/api/v1/auth/login",
+       "host": [
+        "{{baseUrl}}"
+       ],
+       "path": [
+        "api",
+        "v1",
+        "auth",
+        "login"
+       ]
+      },
+      "body": {
+       "mode": "raw",
+       "raw": "{\"email\": \"{{commerceEmail}}\", \"password\": \"{{password}}\"}"
+      }
+     }
+    },
+    {
+     "name": "Create purchase",
+     "event": [
+      {
+       "listen": "test",
+       "script": {
+        "type": "text/javascript",
+        "exec": [
+         "pm.test(\"201\", () => pm.response.to.have.status(201));",
+         "const b = pm.response.json();",
+         "pm.test(\"queda pendiente\", () => pm.expect(b.status).to.eql(\"pending\"));",
+         "pm.environment.set(\"purchaseId\", b.id);"
+        ]
+       }
+      }
+     ],
+     "request": {
+      "method": "POST",
+      "header": [
+       {
+        "key": "Content-Type",
+        "value": "application/json"
+       },
+       {
+        "key": "X-CSRF-Token",
+        "value": "{{csrfToken}}"
+       }
+      ],
+      "url": {
+       "raw": "{{baseUrl}}/api/v1/purchases",
+       "host": [
+        "{{baseUrl}}"
+       ],
+       "path": [
+        "api",
+        "v1",
+        "purchases"
+       ]
+      },
+      "body": {
+       "mode": "raw",
+       "raw": "{\"idempotencyKey\": \"{{idempotencyKey}}\"}"
+      }
+     }
+    },
+    {
+     "name": "Repeat purchase with same key",
+     "event": [
+      {
+       "listen": "test",
+       "script": {
+        "type": "text/javascript",
+        "exec": [
+         "pm.test(\"200 sin duplicar\", () => pm.response.to.have.status(200));",
+         "pm.test(\"misma compra\", () => pm.expect(pm.response.json().id).to.eql(pm.environment.get(\"purchaseId\")));"
+        ]
+       }
+      }
+     ],
+     "request": {
+      "method": "POST",
+      "header": [
+       {
+        "key": "Content-Type",
+        "value": "application/json"
+       },
+       {
+        "key": "X-CSRF-Token",
+        "value": "{{csrfToken}}"
+       }
+      ],
+      "url": {
+       "raw": "{{baseUrl}}/api/v1/purchases",
+       "host": [
+        "{{baseUrl}}"
+       ],
+       "path": [
+        "api",
+        "v1",
+        "purchases"
+       ]
+      },
+      "body": {
+       "mode": "raw",
+       "raw": "{\"idempotencyKey\": \"{{idempotencyKey}}\"}"
+      }
+     }
+    },
+    {
+     "name": "List my purchases",
+     "event": [
+      {
+       "listen": "test",
+       "script": {
+        "type": "text/javascript",
+        "exec": [
+         "pm.test(\"200\", () => pm.response.to.have.status(200));",
+         "pm.test(\"una compra\", () => pm.expect(pm.response.json().length).to.eql(1));"
+        ]
+       }
+      }
+     ],
+     "request": {
+      "method": "GET",
+      "header": [],
+      "url": {
+       "raw": "{{baseUrl}}/api/v1/purchases",
+       "host": [
+        "{{baseUrl}}"
+       ],
+       "path": [
+        "api",
+        "v1",
+        "purchases"
+       ]
+      }
+     }
+    },
+    {
+     "name": "Browser return does not confirm payment",
+     "event": [
+      {
+       "listen": "test",
+       "script": {
+        "type": "text/javascript",
+        "exec": [
+         "pm.test(\"200\", () => pm.response.to.have.status(200));",
+         "const b = pm.response.json();",
+         "pm.test(\"sigue pendiente\", () => pm.expect(b.purchase.status).to.eql(\"pending\"));",
+         "pm.test(\"no habilita carta\", () => pm.expect(b.canCreateLetter).to.eql(false));"
+        ]
+       }
+      }
+     ],
+     "request": {
+      "method": "POST",
+      "header": [
+       {
+        "key": "Content-Type",
+        "value": "application/json"
+       },
+       {
+        "key": "X-CSRF-Token",
+        "value": "{{csrfToken}}"
+       }
+      ],
+      "url": {
+       "raw": "{{baseUrl}}/api/v1/purchases/{{purchaseId}}/verify",
+       "host": [
+        "{{baseUrl}}"
+       ],
+       "path": [
+        "api",
+        "v1",
+        "purchases",
+        "{{purchaseId}}",
+        "verify"
+       ]
+      },
+      "body": {
+       "mode": "raw",
+       "raw": "{}"
+      }
+     }
+    },
+    {
+     "name": "Verify without payment provider",
+     "event": [
+      {
+       "listen": "test",
+       "script": {
+        "type": "text/javascript",
+        "exec": [
+         "pm.test(\"503\", () => pm.response.to.have.status(503));",
+         "pm.test(\"codigo\", () => pm.expect(pm.response.json().code).to.eql(\"PAYMENTS_NOT_CONFIGURED\"));"
+        ]
+       }
+      }
+     ],
+     "request": {
+      "method": "POST",
+      "header": [
+       {
+        "key": "Content-Type",
+        "value": "application/json"
+       },
+       {
+        "key": "X-CSRF-Token",
+        "value": "{{csrfToken}}"
+       }
+      ],
+      "url": {
+       "raw": "{{baseUrl}}/api/v1/purchases/{{purchaseId}}/verify",
+       "host": [
+        "{{baseUrl}}"
+       ],
+       "path": [
+        "api",
+        "v1",
+        "purchases",
+        "{{purchaseId}}",
+        "verify"
+       ]
+      },
+      "body": {
+       "mode": "raw",
+       "raw": "{\"paymentId\": \"123456789\"}"
+      }
+     }
+    },
+    {
+     "name": "Letter on unpaid purchase is rejected",
+     "event": [
+      {
+       "listen": "test",
+       "script": {
+        "type": "text/javascript",
+        "exec": [
+         "pm.test(\"409\", () => pm.response.to.have.status(409));",
+         "pm.test(\"codigo\", () => pm.expect(pm.response.json().code).to.eql(\"PURCHASE_NOT_PAID\"));"
+        ]
+       }
+      }
+     ],
+     "request": {
+      "method": "POST",
+      "header": [
+       {
+        "key": "Content-Type",
+        "value": "application/json"
+       },
+       {
+        "key": "X-CSRF-Token",
+        "value": "{{csrfToken}}"
+       }
+      ],
+      "url": {
+       "raw": "{{baseUrl}}/api/v1/letters",
+       "host": [
+        "{{baseUrl}}"
+       ],
+       "path": [
+        "api",
+        "v1",
+        "letters"
+       ]
+      },
+      "body": {
+       "mode": "raw",
+       "raw": "{\"purchaseId\": \"{{purchaseId}}\", \"title\": \"Para ti\", \"recipientName\": \"Ana\", \"recipientEmail\": \"ana@example.com\", \"body\": \"Hola\\nmundo\"}"
+      }
+     }
+    },
+    {
+     "name": "Save private identity document",
+     "event": [
+      {
+       "listen": "test",
+       "script": {
+        "type": "text/javascript",
+        "exec": [
+         "pm.test(\"200\", () => pm.response.to.have.status(200));",
+         "pm.test(\"solo ultimos 4\", () => pm.expect(pm.response.json().documentLast4).to.eql(\"9999\"));",
+         "pm.test(\"no devuelve el numero\", () => pm.expect(pm.response.text()).to.not.include(\"1000000009999\"));"
+        ]
+       }
+      }
+     ],
+     "request": {
+      "method": "PUT",
+      "header": [
+       {
+        "key": "Content-Type",
+        "value": "application/json"
+       },
+       {
+        "key": "X-CSRF-Token",
+        "value": "{{csrfToken}}"
+       }
+      ],
+      "url": {
+       "raw": "{{baseUrl}}/api/v1/me/identity-document",
+       "host": [
+        "{{baseUrl}}"
+       ],
+       "path": [
+        "api",
+        "v1",
+        "me",
+        "identity-document"
+       ]
+      },
+      "body": {
+       "mode": "raw",
+       "raw": "{\"documentType\": \"CC\", \"documentNumber\": \"1000000009999\"}"
+      }
+     }
+    },
+    {
+     "name": "Read identity document (masked)",
+     "event": [
+      {
+       "listen": "test",
+       "script": {
+        "type": "text/javascript",
+        "exec": [
+         "pm.test(\"200\", () => pm.response.to.have.status(200));",
+         "pm.test(\"enmascarado\", () => pm.expect(pm.response.text()).to.not.include(\"1000000009999\"));"
+        ]
+       }
+      }
+     ],
+     "request": {
+      "method": "GET",
+      "header": [],
+      "url": {
+       "raw": "{{baseUrl}}/api/v1/me/identity-document",
+       "host": [
+        "{{baseUrl}}"
+       ],
+       "path": [
+        "api",
+        "v1",
+        "me",
+        "identity-document"
+       ]
+      }
+     }
+    },
+    {
+     "name": "My letters is empty",
+     "event": [
+      {
+       "listen": "test",
+       "script": {
+        "type": "text/javascript",
+        "exec": [
+         "pm.test(\"200\", () => pm.response.to.have.status(200));",
+         "pm.test(\"sin cartas\", () => pm.expect(pm.response.json().length).to.eql(0));"
+        ]
+       }
+      }
+     ],
+     "request": {
+      "method": "GET",
+      "header": [],
+      "url": {
+       "raw": "{{baseUrl}}/api/v1/letters",
+       "host": [
+        "{{baseUrl}}"
+       ],
+       "path": [
+        "api",
+        "v1",
+        "letters"
+       ]
+      }
+     }
+    },
+    {
+     "name": "Unknown public letter",
+     "event": [
+      {
+       "listen": "test",
+       "script": {
+        "type": "text/javascript",
+        "exec": [
+         "pm.test(\"404\", () => pm.response.to.have.status(404));"
+        ]
+       }
+      }
+     ],
+     "request": {
+      "method": "GET",
+      "header": [],
+      "url": {
+       "raw": "{{baseUrl}}/api/v1/public/letters/inexistente",
+       "host": [
+        "{{baseUrl}}"
+       ],
+       "path": [
+        "api",
+        "v1",
+        "public",
+        "letters",
+        "inexistente"
+       ]
+      }
+     }
+    },
+    {
+     "name": "Webhook without provider",
+     "event": [
+      {
+       "listen": "test",
+       "script": {
+        "type": "text/javascript",
+        "exec": [
+         "pm.test(\"503\", () => pm.response.to.have.status(503));"
+        ]
+       }
+      }
+     ],
+     "request": {
+      "method": "POST",
+      "header": [
+       {
+        "key": "Content-Type",
+        "value": "application/json"
+       }
+      ],
+      "url": {
+       "raw": "{{baseUrl}}/api/v1/webhooks/mercadopago",
+       "host": [
+        "{{baseUrl}}"
+       ],
+       "path": [
+        "api",
+        "v1",
+        "webhooks",
+        "mercadopago"
+       ]
+      },
+      "body": {
+       "mode": "raw",
+       "raw": "{\"id\": 1, \"action\": \"payment.updated\", \"data\": {\"id\": \"1\"}}"
+      }
+     }
+    },
+    {
+     "name": "Logout",
+     "event": [
+      {
+       "listen": "test",
+       "script": {
+        "type": "text/javascript",
+        "exec": [
+         "pm.test(\"200\", () => pm.response.to.have.status(200));"
+        ]
+       }
+      }
+     ],
+     "request": {
+      "method": "POST",
+      "header": [
+       {
+        "key": "Content-Type",
+        "value": "application/json"
+       },
+       {
+        "key": "X-CSRF-Token",
+        "value": "{{csrfToken}}"
+       }
+      ],
+      "url": {
+       "raw": "{{baseUrl}}/api/v1/auth/logout",
+       "host": [
+        "{{baseUrl}}"
+       ],
+       "path": [
+        "api",
+        "v1",
+        "auth",
+        "logout"
+       ]
+      },
+      "body": {
+       "mode": "raw",
+       "raw": "{}"
+      }
+     }
+    }
+   ]
+  },
+  {
+   "name": "Commerce manual (requiere Mercado Pago/Azure/correo)",
+   "description": "Requiere PAYMENT_PROVIDER=mercadopago con credenciales propias y una compra realmente aprobada. No ejecutar en la corrida automatizada.",
+   "item": [
+    {
+     "name": "Verify paid purchase",
+     "event": [
+      {
+       "listen": "test",
+       "script": {
+        "type": "text/javascript",
+        "exec": [
+         "pm.test(\"200\", () => pm.response.to.have.status(200));",
+         "pm.test(\"pagada\", () => pm.expect(pm.response.json().purchase.status).to.eql(\"paid\"));"
+        ]
+       }
+      }
+     ],
+     "request": {
+      "method": "POST",
+      "header": [
+       {
+        "key": "Content-Type",
+        "value": "application/json"
+       },
+       {
+        "key": "X-CSRF-Token",
+        "value": "{{csrfToken}}"
+       }
+      ],
+      "url": {
+       "raw": "{{baseUrl}}/api/v1/purchases/{{purchaseId}}/verify",
+       "host": [
+        "{{baseUrl}}"
+       ],
+       "path": [
+        "api",
+        "v1",
+        "purchases",
+        "{{purchaseId}}",
+        "verify"
+       ]
+      },
+      "body": {
+       "mode": "raw",
+       "raw": "{\"paymentId\": \"{{paymentId}}\"}"
+      }
+     }
+    },
+    {
+     "name": "Create letter",
+     "event": [
+      {
+       "listen": "test",
+       "script": {
+        "type": "text/javascript",
+        "exec": [
+         "pm.test(\"201\", () => pm.response.to.have.status(201));",
+         "pm.environment.set(\"letterId\", pm.response.json().id);"
+        ]
+       }
+      }
+     ],
+     "request": {
+      "method": "POST",
+      "header": [
+       {
+        "key": "Content-Type",
+        "value": "application/json"
+       },
+       {
+        "key": "X-CSRF-Token",
+        "value": "{{csrfToken}}"
+       }
+      ],
+      "url": {
+       "raw": "{{baseUrl}}/api/v1/letters",
+       "host": [
+        "{{baseUrl}}"
+       ],
+       "path": [
+        "api",
+        "v1",
+        "letters"
+       ]
+      },
+      "body": {
+       "mode": "raw",
+       "raw": "{\"purchaseId\": \"{{purchaseId}}\", \"title\": \"Para ti 💌\", \"recipientName\": \"Ana\", \"recipientEmail\": \"ana@example.com\", \"body\": \"Primera línea\\nSegunda con emoji 🌹\", \"theme\": \"classic\"}"
+      }
+     }
+    },
+    {
+     "name": "Create letter again (double click)",
+     "event": [
+      {
+       "listen": "test",
+       "script": {
+        "type": "text/javascript",
+        "exec": [
+         "pm.test(\"200 y misma carta\", () => pm.response.to.have.status(200));",
+         "pm.test(\"mismo id\", () => pm.expect(pm.response.json().id).to.eql(pm.environment.get(\"letterId\")));"
+        ]
+       }
+      }
+     ],
+     "request": {
+      "method": "POST",
+      "header": [
+       {
+        "key": "Content-Type",
+        "value": "application/json"
+       },
+       {
+        "key": "X-CSRF-Token",
+        "value": "{{csrfToken}}"
+       }
+      ],
+      "url": {
+       "raw": "{{baseUrl}}/api/v1/letters",
+       "host": [
+        "{{baseUrl}}"
+       ],
+       "path": [
+        "api",
+        "v1",
+        "letters"
+       ]
+      },
+      "body": {
+       "mode": "raw",
+       "raw": "{\"purchaseId\": \"{{purchaseId}}\", \"title\": \"Otro intento\", \"recipientName\": \"Ana\", \"recipientEmail\": \"ana@example.com\", \"body\": \"texto\"}"
+      }
+     }
+    },
+    {
+     "name": "Update draft",
+     "event": [
+      {
+       "listen": "test",
+       "script": {
+        "type": "text/javascript",
+        "exec": [
+         "pm.test(\"200\", () => pm.response.to.have.status(200));"
+        ]
+       }
+      }
+     ],
+     "request": {
+      "method": "PATCH",
+      "header": [
+       {
+        "key": "Content-Type",
+        "value": "application/json"
+       },
+       {
+        "key": "X-CSRF-Token",
+        "value": "{{csrfToken}}"
+       }
+      ],
+      "url": {
+       "raw": "{{baseUrl}}/api/v1/letters/{{letterId}}",
+       "host": [
+        "{{baseUrl}}"
+       ],
+       "path": [
+        "api",
+        "v1",
+        "letters",
+        "{{letterId}}"
+       ]
+      },
+      "body": {
+       "mode": "raw",
+       "raw": "{\"body\": \"Texto corregido 🌙\\nsegunda línea\"}"
+      }
+     }
+    },
+    {
+     "name": "Publish letter (envía correo con enlace y QR)",
+     "event": [
+      {
+       "listen": "test",
+       "script": {
+        "type": "text/javascript",
+        "exec": [
+         "pm.test(\"200\", () => pm.response.to.have.status(200));",
+         "const b = pm.response.json();",
+         "pm.environment.set(\"publicSlug\", b.publicSlug);",
+         "pm.test(\"publicada\", () => pm.expect(b.status).to.eql(\"published\"));",
+         "pm.test(\"entrega registrada\", () => pm.expect(b.deliveries.length).to.be.above(0));"
+        ]
+       }
+      }
+     ],
+     "request": {
+      "method": "POST",
+      "header": [
+       {
+        "key": "Content-Type",
+        "value": "application/json"
+       },
+       {
+        "key": "X-CSRF-Token",
+        "value": "{{csrfToken}}"
+       }
+      ],
+      "url": {
+       "raw": "{{baseUrl}}/api/v1/letters/{{letterId}}/publish",
+       "host": [
+        "{{baseUrl}}"
+       ],
+       "path": [
+        "api",
+        "v1",
+        "letters",
+        "{{letterId}}",
+        "publish"
+       ]
+      },
+      "body": {
+       "mode": "raw",
+       "raw": "{}"
+      }
+     }
+    },
+    {
+     "name": "Published letter is frozen",
+     "event": [
+      {
+       "listen": "test",
+       "script": {
+        "type": "text/javascript",
+        "exec": [
+         "pm.test(\"409 LETTER_FROZEN\", () => pm.response.to.have.status(409));"
+        ]
+       }
+      }
+     ],
+     "request": {
+      "method": "PATCH",
+      "header": [
+       {
+        "key": "Content-Type",
+        "value": "application/json"
+       },
+       {
+        "key": "X-CSRF-Token",
+        "value": "{{csrfToken}}"
+       }
+      ],
+      "url": {
+       "raw": "{{baseUrl}}/api/v1/letters/{{letterId}}",
+       "host": [
+        "{{baseUrl}}"
+       ],
+       "path": [
+        "api",
+        "v1",
+        "letters",
+        "{{letterId}}"
+       ]
+      },
+      "body": {
+       "mode": "raw",
+       "raw": "{\"body\": \"no debe cambiar\"}"
+      }
+     }
+    },
+    {
+     "name": "Resend letter (no consume otra compra)",
+     "event": [
+      {
+       "listen": "test",
+       "script": {
+        "type": "text/javascript",
+        "exec": [
+         "pm.test(\"202\", () => pm.response.to.have.status(202));"
+        ]
+       }
+      }
+     ],
+     "request": {
+      "method": "POST",
+      "header": [
+       {
+        "key": "Content-Type",
+        "value": "application/json"
+       },
+       {
+        "key": "X-CSRF-Token",
+        "value": "{{csrfToken}}"
+       }
+      ],
+      "url": {
+       "raw": "{{baseUrl}}/api/v1/letters/{{letterId}}/deliveries",
+       "host": [
+        "{{baseUrl}}"
+       ],
+       "path": [
+        "api",
+        "v1",
+        "letters",
+        "{{letterId}}",
+        "deliveries"
+       ]
+      },
+      "body": {
+       "mode": "raw",
+       "raw": "{}"
+      }
+     }
+    },
+    {
+     "name": "Public viewer",
+     "event": [
+      {
+       "listen": "test",
+       "script": {
+        "type": "text/javascript",
+        "exec": [
+         "pm.test(\"200\", () => pm.response.to.have.status(200));",
+         "pm.test(\"sin correo del comprador\", () => pm.expect(pm.response.text()).to.not.include(\"@\"));"
+        ]
+       }
+      }
+     ],
+     "request": {
+      "method": "GET",
+      "header": [],
+      "url": {
+       "raw": "{{baseUrl}}/api/v1/public/letters/{{publicSlug}}",
+       "host": [
+        "{{baseUrl}}"
+       ],
+       "path": [
+        "api",
+        "v1",
+        "public",
+        "letters",
+        "{{publicSlug}}"
+       ]
+      }
+     }
+    },
+    {
+     "name": "Public QR",
+     "event": [
+      {
+       "listen": "test",
+       "script": {
+        "type": "text/javascript",
+        "exec": [
+         "pm.test(\"200 png\", () => pm.response.to.have.status(200));"
+        ]
+       }
+      }
+     ],
+     "request": {
+      "method": "GET",
+      "header": [],
+      "url": {
+       "raw": "{{baseUrl}}/api/v1/public/letters/{{publicSlug}}/qr.png",
+       "host": [
+        "{{baseUrl}}"
+       ],
+       "path": [
+        "api",
+        "v1",
+        "public",
+        "letters",
+        "{{publicSlug}}",
+        "qr.png"
+       ]
+      }
+     }
+    }
+   ]
+  }
+ ]
 }

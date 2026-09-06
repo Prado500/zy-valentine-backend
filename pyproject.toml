@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "zy-valentine-backend"
-version = "0.2.0"
+version = "0.3.0"
 description = "API RESTful asíncrona para la gestión de cartas para san valentín"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -20,11 +20,15 @@ dependencies = [
     "itsdangerous>=2.2,<3",
     "google-auth>=2.35,<3",
     "requests>=2.32,<3",
-    "cachecontrol>=0.14,<1"
-
+    "cachecontrol>=0.14,<1",
+    "httpx>=0.28,<1",
+    "segno>=1.6,<2",
+    "python-multipart>=0.0.9,<1"
 ]
 
 [project.optional-dependencies]
+azure = ["azure-storage-blob>=12.20,<13"]
+
 test = [
     "pytest>=8.4.1",
     "pytest-asyncio>=0.25.0",

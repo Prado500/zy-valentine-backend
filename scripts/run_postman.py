@@ -71,6 +71,8 @@ def main():
                     f"baseUrl=http://127.0.0.1:{port}",
                     "--folder",
                     "Automated local",
+                    "--folder",
+                    "Commerce local",
                     "--reporters",
                     "cli",
                     "--bail",

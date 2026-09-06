@@ -26,7 +26,7 @@ async def test_concurrent_google_first_login_has_one_identity(client, app):
     results = await asyncio.gather(
         *[client.post("/api/v1/auth/google", json={"credential": "mocked"}) for _ in range(2)]
     )
-    assert [r.status_code for r in results] == [200, 200]
+    assert [r.status_code for r in results] == [200, 200], [r.text for r in results]
     assert results[0].json()["id"] == results[1].json()["id"]
 
 

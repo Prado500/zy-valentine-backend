@@ -1,98 +1,150 @@
-# Zyvencore Valentine API — base 0.2.0
+# Zyvencore Valentine API — 0.3.0
 
-Backend FastAPI con PostgreSQL/SQLAlchemy asíncrono, Alembic y autenticación por **correo/contraseña y Google**. Implementación local de [spec 001](specs/001-base-auth/spec.md); no incluye pagos, cartas, correo, cédulas ni cambios de infraestructura.
+Backend FastAPI con PostgreSQL/SQLAlchemy asíncrono, Alembic y autenticación por
+**correo/contraseña y Google mediante sesiones opacas revocables**. Incluye el dominio
+comercial: cédula privada, compras, verificación de pago en servidor, cartas, fotos,
+enlace público con QR y correo de entrega.
 
-La [auditoría inicial](docs/AUDITORIA.md) y el [plan comercial](docs/INTEGRACION_Y_PLAN.md) son antecedentes. Para lo implementado, prevalecen spec 001 y este README. La referencia ecotur-asoprado-api y el aporte Iops.md no se modificaron.
+**No se usa JWT.** Las variables `JWT_SECRET_KEY`, `ALGORITHM` y
+`ACCESS_TOKEN_EXPIRE_MINUTES` que aparecen en la configuración de Azure son heredadas
+del proyecto de referencia y esta API no las lee. Ver
+[matriz de configuración](docs/MATRIZ_CONFIGURACION.md).
 
-## Endpoints implementados
+> `docs/AZURECONF.md` contiene contraseñas de base de datos en texto plano. Trátalas
+> como comprometidas: rótalas y muévelas a Key Vault. Este repositorio no contiene
+> ningún valor de Azure.
+
+**¿Vas a trabajar sobre este código?** Empieza por la
+[guía técnica](docs/GUIA_TECNICA.md): explica la arquitectura, qué hace cada archivo,
+cómo fluye una petición y por qué se tomó cada decisión.
+
+Documentos: [guía técnica](docs/GUIA_TECNICA.md),
+[spec 001 base+auth](specs/001-base-auth/spec.md),
+[spec 002 configuración+comercio](specs/002-comercio/spec.md),
+[matriz de configuración](docs/MATRIZ_CONFIGURACION.md),
+[dominio comercial](docs/DOMINIO_COMERCIAL.md),
+[operación y handoff](docs/BASE_AUTH_OPERACION.md).
+`ecotur-asoprado-api` es solo referencia de organización; no se modificó, igual que
+`Iops.md` y los pipelines.
+
+## Endpoints
+
+### Base y autenticación
 
 | Método/ruta | Resultado |
 |---|---|
-| GET /; GET /health/live | Vida del proceso, sin consultar DB |
-| GET /health/ready | DB accesible y migración 0001_base_auth aplicada; 503 si no |
-| GET /api/v1/auth/csrf | Token CSRF y cookie firmada, no cacheables |
-| POST /api/v1/auth/register | Registro con email, password y name; 201 |
-| POST /api/v1/auth/login | Sesión opaca en cookie HttpOnly y perfil |
-| POST /api/v1/auth/google | Verifica ID token Google y abre sesión |
-| GET /api/v1/me | Perfil propio autenticado |
-| POST /api/v1/auth/logout | Revoca sesión actual y elimina cookie |
-| GET /docs; GET /openapi.json | Contrato generado por FastAPI |
+| `GET /`, `GET /health/live` | Vida del proceso, sin consultar la base |
+| `GET /health/ready` | Base accesible y migración `0002_commerce` aplicada; 503 si no |
+| `GET /api/v1/auth/csrf` | Token CSRF y cookie firmada |
+| `POST /api/v1/auth/register` | Registro (201, no inicia sesión) |
+| `POST /api/v1/auth/login` | Sesión opaca en cookie HttpOnly |
+| `POST /api/v1/auth/google` | Verifica el ID token de Google y abre sesión propia |
+| `GET /api/v1/me` | Perfil propio |
+| `POST /api/v1/auth/logout` | Revoca la sesión actual |
 
-Registro no inicia sesión. Contraseña de 12..128 caracteres con Argon2, nombre no vacío hasta 120; email normalizado y único. No se envían correos de verificación: emailVerified=false para registro con contraseña. La cédula futura será dato privado aparte, nunca credencial ni ID interno.
+### Dominio comercial
 
-Todas las escrituras necesitan cookie CSRF y header X-CSRF-Token obtenidos con GET /auth/csrf. El navegador debe usar credentials: include. Cookie de sesión revocable: hash persistido, vencimiento configurable, rotación al login, revocación al logout. En develop/staging/production usa Secure y prefijo __Host-. No se devuelven tokens bearer/JWT al cliente.
+| Método/ruta | Resultado |
+|---|---|
+| `PUT`/`GET /api/v1/me/identity-document` | Cédula privada; devuelve solo tipo y últimos 4 dígitos |
+| `POST /api/v1/purchases` | Intención de pago idempotente (201 nueva, 200 si repite la clave) |
+| `GET /api/v1/purchases`, `GET /api/v1/purchases/{id}` | Compras propias con estado y `hasLetter` |
+| `POST /api/v1/purchases/{id}/verify` | **Verificación en servidor** del pago |
+| `POST /api/v1/webhooks/mercadopago` | Webhook firmado, idempotente y monótono |
+| `POST /api/v1/letters` | Crea la carta de una compra pagada (200 si ya existía) |
+| `GET /api/v1/letters`, `GET /api/v1/letters/{id}` | "Mis cartas": pago, entrega y borradores |
+| `PATCH /api/v1/letters/{id}` | Edita solo mientras sea borrador |
+| `POST`/`DELETE /api/v1/letters/{id}/photos…` | Fotos ordenadas, validadas por firma binaria |
+| `POST /api/v1/letters/{id}/publish` | Publica, genera enlace y QR, y envía el correo |
+| `POST /api/v1/letters/{id}/deliveries` | Reenvío; no consume otra compra |
+| `GET /api/v1/letters/{id}/qr.png` | QR de la carta (dueño) |
+| `GET /api/v1/public/letters/{slug}` | Visor público: sin usuario, sin correo, sin cédula |
+| `GET /api/v1/public/letters/{slug}/photos/{n}`, `/qr.png` | Fotos y QR públicos |
+| `GET /docs`, `GET /openapi.json` | Contrato generado por FastAPI |
 
-Errores devuelven code, message, fieldErrors y requestId, sin contraseña/credential ni detalles de SQL. Duplicado: 409; inválido: 422; sin sesión o credenciales incorrectas: 401; CSRF: 403; límite: 429; DB/Google no disponibles: 503.
+Reglas: un usuario puede tener muchas compras; **una compra pagada habilita exactamente
+una carta**; consultar o reenviar no consume otra compra; el doble clic, varias pestañas
+o los webhooks repetidos no crean una segunda carta. Detalle, estados, límites de
+validación y códigos de error en [dominio comercial](docs/DOMINIO_COMERCIAL.md).
+
+Todas las escrituras requieren la cookie CSRF y la cabecera `X-CSRF-Token`; el
+navegador debe usar `credentials: include`. El webhook es la única excepción y se
+autentica por firma HMAC. Los errores devuelven `code`, `message`, `fieldErrors` y
+`requestId`, sin contraseñas, credenciales ni detalles de SQL.
 
 ## Configuración local
 
-Python 3.11+; versión validada 3.12. PostgreSQL local y un entorno virtual exclusivo. Instalar desde la raíz:
+Python 3.11+ (validado en 3.12.14), PostgreSQL local y un entorno virtual propio:
 
-```powershell
+```bash
 python -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -c requirements.lock -e ".[test]"
-Copy-Item .env.example .env
+.venv/bin/python -m pip install -c requirements.lock -e ".[test]"
+cp .env.example .env
 ```
 
-Completar .env con una DB **local propia** y SESSION_SECRET aleatorio de al menos 32 caracteres. Ejemplo de generación para la sesión actual, sin imprimir el valor:
+`.env` ya está en `.gitignore`. Genera los secretos locales sin imprimirlos:
 
-```powershell
-$env:SESSION_SECRET = .\.venv\Scripts\python.exe -c "import secrets; print(secrets.token_urlsafe(48))"
+```bash
+.venv/bin/python -c "import secrets; print('SESSION_SECRET=' + secrets.token_urlsafe(48))" >> .env
+.venv/bin/python -c "import secrets; print('PII_HMAC_KEY=' + secrets.token_urlsafe(48))" >> .env
 ```
 
-No usar credenciales de la referencia. DATABASE_URL usa postgresql+asyncpg, sin parámetros de consulta; TLS se configura mediante DB_SSL_MODE=verify-full y DB_SSL_CA_FILE opcional. Contraseñas con caracteres reservados requieren percent-encoding en la URL. En Compose usar contraseña local URL-safe.
+`DATABASE_URL` usa `postgresql+asyncpg`. Si la cadena viene de Azure con
+`?sslmode=require` o `?ssl=require`, la aplicación la acepta y la traduce a
+`DB_SSL_MODE=verify-full`; cualquier otro parámetro aborta el arranque y ningún entorno
+remoto puede degradar TLS. Las contraseñas con caracteres reservados van
+percent-encoded.
 
-Después de verificar que DATABASE_URL apunta a la base local deseada:
-
-```powershell
-.\.venv\Scripts\python.exe -m alembic upgrade head
-.\.venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --no-proxy-headers
+```bash
+.venv/bin/python -m alembic upgrade head
+.venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --no-proxy-headers
 ```
 
-No hay create_all ni migraciones al inicio. Readiness permanece 503 hasta migrar. Una base existente con tablas ajenas debe revisarse con su dueño antes de cualquier migración; no usar stamp para ocultar conflictos.
+No hay `create_all` ni migraciones al arrancar; readiness responde 503 hasta migrar.
+Una base con tablas ajenas debe revisarse con su responsable antes de migrar.
 
-requirements.lock fija el conjunto resuelto en Windows/Python 3.12, usado como restricciones (-c); contiene también herramientas de test, pero Docker instala solo dependencias del proyecto. Linux/contenedor queda pendiente de validación real.
+Integraciones opcionales: `PAYMENT_PROVIDER=mercadopago` (token y secreto de webhook),
+`STORAGE_BACKEND=azure` (requiere `pip install '.[azure]'`), `MAIL_BACKEND=smtp`,
+`GOOGLE_CLIENT_ID`. Sin ellas, la API responde 503 explícito en los puntos que las
+necesitan, y el resto del flujo funciona.
 
 ## Docker local
 
-Compose crea su propia base interna sin publicar el puerto de PostgreSQL. API solo expuesta en 127.0.0.1:8000. Definir POSTGRES_PASSWORD local y SESSION_SECRET en .env; no poner DATABASE_URL remoto en Compose.
-
-```powershell
+```bash
 docker compose up -d db
 docker compose build api
 docker compose run --rm api alembic upgrade head
 docker compose up -d api
 ```
 
-No ejecutar downgrade en datos que se deban conservar. Dockerfile usa usuario sin privilegios, excluye secretos, respeta PORT (por defecto 8000) y WEB_CONCURRENCY. No inicia migraciones ni modifica pipelines. Configuración Compose validada; construcción/ejecución pendientes por motor Docker no disponible en esta sesión.
+Compose crea su propia base, no publica el puerto de PostgreSQL y expone la API solo en
+`127.0.0.1:8000`. Las fotos van a un volumen propio. No pongas un `DATABASE_URL` remoto
+en Compose. Verificado en Linux con PostgreSQL 15 y la imagen construida.
 
-## Google
+## Pruebas y Postman
 
-Configurar GOOGLE_CLIENT_ID de cliente OAuth web y orígenes autorizados en Google. Flujo callback JSON: obtener csrfToken, usar ese valor como nonce en GIS, obtener credential y enviarlo a POST /auth/google junto a X-CSRF-Token y cookies. El POST HTML directo de GIS no es la interfaz de esta API.
+El runner crea su propio PostgreSQL efímero (contenedor Docker o binarios locales),
+ejecuta `upgrade/check/downgrade/upgrade` y pytest, y lo destruye al terminar. Nunca usa
+una base existente ni lee `.env`.
 
-Verifica firma, audiencia, emisor, vencimiento, nonce y email_verified. Se identifica por sub. Si el email coincide con otra cuenta sin esa identidad Google, responde ACCOUNT_LINK_REQUIRED: nunca fusiona automáticamente. Vinculación explícita de cuentas, recuperación/cambio de contraseña y verificación por correo quedan fuera de este corte. Un usuario Google no puede iniciar sesión con una contraseña arbitraria.
-
-Sin GOOGLE_CLIENT_ID, responde GOOGLE_NOT_CONFIGURED. No se configuró un cliente real ni se accedió a una cuenta Google. Pruebas criptográficas usan claves efímeras propias y simulan únicamente el transporte de certificados; no son un login real con Google.
-
-## Pruebas reproducibles y Postman
-
-El runner crea una base PostgreSQL nueva en loopback, aleatoria y exclusiva; ejecuta upgrade/check/downgrade/upgrade y pytest; luego detiene su propia instancia incluso ante fallo. No utiliza una base existente. Requiere PostgreSQL instalado; LOCAL_POSTGRES_BIN permite indicar su directorio bin (por defecto PostgreSQL 18 en Windows).
-
-```powershell
-.\.venv\Scripts\python.exe scripts/validate_local.py
-npm.cmd install --prefix .local-validation/tools newman@6
-.\.venv\Scripts\python.exe scripts/validate_local.py --postman
-.\.venv\Scripts\python.exe -m ruff check app tests scripts alembic
+```bash
+.venv/bin/python scripts/validate_local.py            # binarios locales si los hay
+.venv/bin/python scripts/validate_local.py --docker   # fuerza el contenedor efímero
+npm install --prefix .local-validation/tools newman@6
+.venv/bin/python scripts/validate_local.py --docker --postman
+.venv/bin/python -m ruff check app tests scripts alembic
 ```
 
-[Importar colección](postman/zyvalentine.postman_collection.json) y [entorno local vacío](postman/local.postman_environment.json). Mantener cookie jar habilitado. Carpeta Automated local: requiere Google sin configurar y una base de pruebas descartable; genera email/contraseña ficticios en memoria y realiza 14 solicitudes. Para repetir manualmente, vaciar email/password del entorno y no exportar valores de ejecución.
+[Colección Postman](postman/zyvalentine.postman_collection.json) y
+[entorno local sin secretos](postman/local.postman_environment.json), con el cookie jar
+habilitado. Las carpetas `Automated local` y `Commerce local` se ejecutan sin Google,
+Mercado Pago, Azure ni correo reales. `Google manual` y `Commerce manual` requieren esas
+integraciones configuradas y no se ejecutan automáticamente.
 
-La carpeta Google manual requiere cliente configurado y credential fresca obtenida con nonce correcto. Sus pruebas de éxito no se ejecutan automáticamente ni deben sustituirse por tokens ficticios de producción.
-
-[Resultados y límites](specs/001-base-auth/validation.md).
+[Resultados y límites](specs/002-comercio/validation.md).
 
 ## Coordinación con infraestructura
 
-[Contrato operativo propuesto](docs/BASE_AUTH_OPERACION.md): variables, pool, migración y pendientes del compañero. APP_ENV usa local/develop/staging/production (main corresponde a production); rama actual develop-julian, sin cambio/commit/push.
-
-No se implementó la infraestructura remota ni se confirmó capacidad de Azure. La regla futura continúa siendo varias compras por usuario y una compra pagada por carta, sin implementaciones comerciales en esta base.
+Pendientes externos, rotación de secretos y presupuesto de conexiones en
+[la matriz de configuración](docs/MATRIZ_CONFIGURACION.md). No se ejecutaron migraciones
+ni consultas contra Azure, y no se modificaron pipelines ni recursos remotos.

@@ -7,6 +7,7 @@ from sqlalchemy import text
 from app.core.config import Settings
 from app.core.errors import ApiError
 from app.core.security import RateLimiter, issue_csrf, verify_csrf
+from app.main import EXPECTED_REVISION
 from app.services.google import GoogleVerifier
 
 
@@ -21,7 +22,10 @@ async def test_health_and_readiness(client, app):
         assert (await client.get("/health/live")).status_code == 200
     finally:
         async with app.state.engine.begin() as conn:
-            await conn.execute(text("UPDATE alembic_version SET version_num='0001_base_auth'"))
+            await conn.execute(
+                text("UPDATE alembic_version SET version_num=:revision"),
+                {"revision": EXPECTED_REVISION},
+            )
 
 
 async def test_cors_and_openapi(client):
@@ -54,7 +58,8 @@ async def test_cors_and_openapi(client):
         {"cors_origins": []},
         {"app_env": "staging"},
         {"database_url": "sqlite:///test.db"},
-        {"database_url": "postgresql+asyncpg://localhost/test?sslmode=require"},
+        {"database_url": "postgresql+asyncpg://localhost/test?options=-csearch_path%3Dx"},
+        {"database_url": "postgresql+asyncpg://localhost/test?sslmode=maybe"},
         {"web_concurrency": 10},
         {"cookie_samesite": "none"},
     ],
@@ -64,16 +69,18 @@ def test_settings_reject_unsafe_config(settings, changes):
         Settings(_env_file=None, **{**settings.model_dump(), **changes})
 
 
+REMOTE = {
+    "app_env": "staging",
+    "db_ssl_mode": "verify-full",
+    "cors_origins": ["https://frontend.example.com"],
+    "storage_backend": "azure",
+    "azure_storage_connection_string": "UseDevelopmentStorage=true",
+    "azure_container_name": "letters",
+}
+
+
 def test_remote_cookies_and_tls(settings):
-    config = Settings(
-        _env_file=None,
-        **{
-            **settings.model_dump(),
-            "app_env": "staging",
-            "db_ssl_mode": "verify-full",
-            "cors_origins": ["https://frontend.example.com"],
-        },
-    )
+    config = Settings(_env_file=None, **{**settings.model_dump(), **REMOTE})
     assert config.secure_cookies
     assert config.session_cookie.startswith("__Host-")
     assert config.csrf_cookie.startswith("__Host-")

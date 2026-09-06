@@ -29,9 +29,18 @@ services:
       DB_POOL_SIZE: 2
       DB_MAX_OVERFLOW: 0
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      FRONTEND_URL: ${FRONTEND_URL:-http://localhost:5173}
+      # Local: sin proveedor de pagos, correo a consola y fotos en un volumen propio.
+      PAYMENT_PROVIDER: none
+      MAIL_BACKEND: console
+      STORAGE_BACKEND: local
+      LOCAL_STORAGE_DIR: /data/photos
+    volumes:
+      - local_photos:/data/photos
     depends_on:
       db:
         condition: service_healthy
 # No migration is run automatically on container/API startup.
 volumes:
   local_pg_data:
+  local_photos:
