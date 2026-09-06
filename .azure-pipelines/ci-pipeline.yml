@@ -1,0 +1,35 @@
+trigger: none
+
+pr:
+  branches:
+    include:
+      - develop
+      - staging
+      - main
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+variables:
+  - name: pythonVersion
+    value: '3.14'
+  - group: VG-ECOTUR-DEV
+
+steps:
+  - task: UsePythonVersion@0
+    displayName: 'Configurar versión de Python'
+    inputs:
+      versionSpec: '$(pythonVersion)'
+
+  - script: |
+      pip install -e .[test]
+    displayName: 'Instalar dependencias (pyproject.toml)'
+
+  - script: |
+      pytest -v
+    displayName: 'Compuerta de Calidad: Ejecutar Pruebas Unitarias (Pytest)'
+    env:
+      DATABASE_URL: "sqlite+aiosqlite:///:memory:"
+      JWT_SECRET_KEY: "super_secreto_ficticio_para_el_ci_pipeline"
+      MAIL_USERNAME: $(MAIL_USERNAME)
+      MAIL_PASSWORD: $(MAIL_PASSWORD)
