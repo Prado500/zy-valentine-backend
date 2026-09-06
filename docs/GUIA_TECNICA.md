@@ -680,15 +680,45 @@ readiness quedará en 503.
    `pip install '.[azure]'`.
 5. `WEB_CONCURRENCY` y `APP_REPLICAS` con los valores **reales**, o el presupuesto de
    conexiones no significa nada.
-6. `SESSION_SECRET` idéntico en todas las réplicas.
+6. `SESSION_SECRET` idéntico en todas las réplicas y distinto entre entornos.
 
-### 12.3 Diagnóstico
+La lista exacta de variables que hay que dar de alta en cada App Service, y las que
+sobran por venir del proyecto de referencia, está en
+[`MATRIZ_CONFIGURACION.md`](MATRIZ_CONFIGURACION.md) §8.
+
+### 12.3 Cuando la aplicación no arranca
+
+`get_settings()` captura el `ValidationError` de pydantic y lanza `ConfigurationError`
+con un diagnóstico legible: qué variable falla, por qué y cómo obtenerla. En el log del
+App Service se ve un bloque como este, en lugar de cincuenta líneas de traza:
+
+```
+========================================================================
+ La aplicación no puede arrancar: configuración inválida (aplicación)
+========================================================================
+  SESSION_SECRET: Field required
+      -> Secreto aleatorio de al menos 32 caracteres, idéntico en todas las
+         réplicas. Genera uno con: python -c "import secrets; ..."
+         Esta API no usa JWT: JWT_SECRET_KEY no lo sustituye.
+========================================================================
+```
+
+Nunca incluye valores: `hide_input_in_errors=True` los omite y los mensajes solo nombran
+variables. Cada comprobación del validador dice qué arreglar (`CORS_ORIGINS`,
+`FRONTEND_URL`, `STORAGE_BACKEND`, el cálculo exacto del presupuesto de conexiones), no
+solo que algo está mal.
+
+Además, si existe `WEBSITE_SITE_NAME` —que Azure App Service define siempre— y `APP_ENV`
+no se declaró, la aplicación se niega a arrancar: sin esa variable caería a `local` y
+serviría cookies sin `Secure` en un despliegue real.
+
+### 12.4 Diagnóstico
 
 `GET /api/v1/health/commerce` devuelve qué integraciones están activas (proveedor de
 pagos, almacenamiento, correo, congelado) **sin revelar ningún secreto**. Es lo primero
 que hay que mirar cuando algo responde 503 en un entorno.
 
-### 12.4 Pendientes conocidos
+### 12.5 Pendientes conocidos
 
 - Limitador de intentos distribuido entre réplicas.
 - Limpieza programada de sesiones vencidas y compras caducadas (los índices ya existen).

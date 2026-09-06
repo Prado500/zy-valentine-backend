@@ -2,7 +2,7 @@ from functools import lru_cache
 from typing import Literal
 from urllib.parse import urlsplit
 
-from pydantic import Field, SecretStr, model_validator
+from pydantic import Field, SecretStr, ValidationError, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy.engine import make_url
 
@@ -12,6 +12,67 @@ from app.core.dsn import DsnError, split_ssl_query, strongest
 # Se documentan explícitamente para que su presencia en Azure no se interprete
 # como que existe autenticación por JWT: la sesión es opaca y revocable.
 LEGACY_UNUSED_VARIABLES = ("JWT_SECRET_KEY", "ALGORITHM", "ACCESS_TOKEN_EXPIRE_MINUTES")
+
+# Pistas accionables por variable, para que un fallo de arranque se resuelva sin leer
+# el código. Nunca incluyen valores: solo qué es la variable y cómo obtenerla.
+CONFIG_HELP = {
+    "session_secret": (
+        "Secreto aleatorio de al menos 32 caracteres, idéntico en todas las réplicas. "
+        'Genera uno con: python -c "import secrets; print(secrets.token_urlsafe(48))". '
+        "Esta API no usa JWT: JWT_SECRET_KEY no lo sustituye."
+    ),
+    "database_url": (
+        "Cadena postgresql+asyncpg://usuario:clave@servidor:5432/base. Admite "
+        "?sslmode=require o ?ssl=require y los traduce a TLS verificado."
+    ),
+    "cors_origins": (
+        'Array JSON de orígenes exactos, por ejemplo ["https://mi-frontend.example.com"]. '
+        "Sin comodines ni rutas; en entornos remotos deben ser HTTPS."
+    ),
+    "frontend_url": (
+        "Base del visor público; de aquí salen el enlace del correo y el código QR. "
+        "En entornos remotos debe ser HTTPS."
+    ),
+    "app_env": "Uno de: local, develop, staging, production. La rama main es production.",
+    "storage_backend": (
+        "En entornos remotos debe ser 'azure' con AZURE_STORAGE_CONNECTION_STRING y "
+        "AZURE_CONTAINER_NAME: el disco del App Service no es durable."
+    ),
+}
+
+
+class ConfigurationError(RuntimeError):
+    """Fallo de configuración con un mensaje legible, sin volcado de pydantic."""
+
+
+def format_settings_error(error: ValidationError, source: str) -> str:
+    """Convierte el error de pydantic en un diagnóstico accionable.
+
+    Solo se muestran nombres de variables y mensajes; nunca los valores recibidos
+    (`hide_input_in_errors=True` ya los omite), así que el log del App Service no
+    filtra secretos.
+    """
+    lines = [
+        "",
+        "=" * 72,
+        f" La aplicación no puede arrancar: configuración inválida ({source})",
+        "=" * 72,
+    ]
+    for item in error.errors():
+        field = ".".join(str(part) for part in item["loc"])
+        lines.append(f"  {field.upper() if field else 'CONFIGURACIÓN'}: {item['msg']}")
+        hint = CONFIG_HELP.get(field)
+        if hint:
+            lines.append(f"      -> {hint}")
+    lines += [
+        "",
+        " Define estas variables donde corre el proceso: en Azure, App Service >",
+        " Configuración > Variables de entorno; en local, el archivo .env.",
+        " La lista completa por entorno está en docs/MATRIZ_CONFIGURACION.md.",
+        "=" * 72,
+        "",
+    ]
+    return "\n".join(lines)
 
 
 def resolve_database_url(raw_url: str, app_env: str, configured_mode: str) -> tuple[str, str]:
@@ -85,6 +146,9 @@ class Settings(BaseSettings):
     web_concurrency: int = Field(default=1, ge=1)
     app_replicas: int = Field(default=1, ge=1)
     port: int = Field(default=8000, ge=1, le=65535)
+    # Azure App Service define WEBSITE_SITE_NAME automáticamente. Sirve para detectar
+    # un despliegue real y exigir que APP_ENV se declare de forma explícita.
+    website_site_name: str | None = None
 
     # --- Sesión y autenticación --------------------------------------------------
     session_minutes: int = Field(default=30, ge=1, le=1440)
@@ -132,6 +196,13 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_runtime(self):
+        if self.website_site_name and "app_env" not in self.model_fields_set:
+            raise ValueError(
+                "APP_ENV no está definido en un App Service. Sin él la aplicación "
+                "arrancaría como 'local': cookies sin Secure ni prefijo __Host- y sin "
+                "exigir TLS ni almacenamiento durable. Declara APP_ENV=develop, staging "
+                "o production"
+            )
         if len(self.session_secret.get_secret_value()) < 32:
             raise ValueError("SESSION_SECRET must contain at least 32 characters")
         # La URL almacenada queda sin query; TLS vive en DB_SSL_MODE y nunca se degrada.
@@ -148,18 +219,33 @@ class Settings(BaseSettings):
         if self.frontend_url:
             _validate_origin(self.frontend_url, "FRONTEND_URL")
         if self.secure_cookies:
-            if self.db_ssl_mode != "verify-full" or any(
-                not o.startswith("https://") for o in self.cors_origins
-            ):
-                raise ValueError("Remote environments require verified TLS and HTTPS origins")
+            # Mensajes específicos: un fallo de arranque debe decir qué variable arreglar.
+            if self.db_ssl_mode != "verify-full":
+                raise ValueError(
+                    "DB_SSL_MODE debe ser 'verify-full' fuera de local, o DATABASE_URL "
+                    "debe traer ?sslmode=require / ?ssl=require para elevarse a TLS "
+                    "verificado"
+                )
+            insecure = sum(1 for o in self.cors_origins if not o.startswith("https://"))
+            if insecure:
+                raise ValueError(
+                    f"CORS_ORIGINS debe contener solo orígenes HTTPS fuera de local; "
+                    f"{insecure} de {len(self.cors_origins)} no lo son. ¿Quedó el valor "
+                    "por defecto de desarrollo?"
+                )
             if self.frontend_url and not self.frontend_url.startswith("https://"):
-                raise ValueError("Remote environments require an HTTPS FRONTEND_URL")
+                raise ValueError("FRONTEND_URL debe ser HTTPS fuera de local")
         elif self.cookie_samesite == "none":
             raise ValueError("SameSite=None requires secure cookies")
 
         used = self.web_concurrency * self.app_replicas * (self.db_pool_size + self.db_max_overflow)
         if used + self.db_reserved_connections > self.db_connection_budget:
-            raise ValueError("Configured workers/replicas/pools exceed connection budget")
+            raise ValueError(
+                f"WEB_CONCURRENCY({self.web_concurrency}) x APP_REPLICAS"
+                f"({self.app_replicas}) x pool({self.db_pool_size + self.db_max_overflow})"
+                f" = {used}, mas {self.db_reserved_connections} reservadas, supera "
+                f"DB_CONNECTION_BUDGET={self.db_connection_budget}"
+            )
 
         if self.payment_provider == "mercadopago" and not self.mercadopago_access_token:
             raise ValueError(
@@ -174,7 +260,11 @@ class Settings(BaseSettings):
         if self.mail_backend == "smtp" and not (self.mail_username and self.mail_password):
             raise ValueError("SMTP mail backend requires MAIL_USERNAME and MAIL_PASSWORD")
         if self.app_env != "local" and self.storage_backend == "local":
-            raise ValueError("Remote environments must use durable storage (STORAGE_BACKEND=azure)")
+            raise ValueError(
+                "Fuera de local se exige almacenamiento durable: STORAGE_BACKEND=azure "
+                "con AZURE_STORAGE_CONNECTION_STRING y AZURE_CONTAINER_NAME. El disco "
+                "del App Service no conserva las fotos entre reinicios"
+            )
         return self
 
     @property
@@ -220,9 +310,17 @@ def _validate_origin(origin: str, field: str) -> None:
 
 @lru_cache
 def get_settings() -> Settings:
-    return Settings()
+    try:
+        return Settings()
+    except ValidationError as error:
+        # `from None` evita el volcado de pydantic: en el log del App Service queda
+        # el diagnóstico legible, no cincuenta líneas de traza interna.
+        raise ConfigurationError(format_settings_error(error, "aplicación")) from None
 
 
 @lru_cache
 def get_migration_settings() -> MigrationSettings:
-    return MigrationSettings()
+    try:
+        return MigrationSettings()
+    except ValidationError as error:
+        raise ConfigurationError(format_settings_error(error, "migraciones")) from None
