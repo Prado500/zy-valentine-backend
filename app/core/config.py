@@ -34,6 +34,20 @@ CONFIG_HELP = {
         "En entornos remotos debe ser HTTPS."
     ),
     "app_env": "Uno de: local, develop, staging, production. La rama main es production.",
+    "payment_provider": (
+        "none (sin pagos, /verify responde 503), mercadopago (real) o fake (laboratorio "
+        "que aprueba cualquier pago; solo con APP_ENV=local)."
+    ),
+    "azure_service_bus_connection_string": (
+        "Cadena 'Endpoint=sb://...;SharedAccessKeyName=...;SharedAccessKey=...' de la "
+        "política de la cola. Es OPCIONAL: sin ella la API escribe la carta de forma "
+        "síncrona, como hasta ahora, y el worker no arranca."
+    ),
+    "service_bus_queue_name": (
+        "Nombre de la cola que recibe las cartas. OPCIONAL: solo se usa junto con "
+        "AZURE_SERVICE_BUS_CONNECTION_STRING; si falta una de las dos, la API degrada "
+        "a escritura síncrona sin fallar el arranque."
+    ),
     "storage_backend": (
         "En entornos remotos debe ser 'azure' con AZURE_STORAGE_CONNECTION_STRING y "
         "AZURE_CONTAINER_NAME: el disco del App Service no es durable."
@@ -164,7 +178,10 @@ class Settings(BaseSettings):
     pii_hmac_key: SecretStr | None = None
 
     # --- Compras y pagos ----------------------------------------------------------
-    payment_provider: Literal["none", "mercadopago"] = "none"
+    # "fake" es un proveedor de laboratorio que aprueba cualquier pago. El validador
+    # de abajo lo prohíbe fuera de APP_ENV=local: jamás debe existir en un entorno
+    # que cobre dinero de verdad.
+    payment_provider: Literal["none", "mercadopago", "fake"] = "none"
     mercadopago_access_token: SecretStr | None = None
     mercadopago_webhook_secret: SecretStr | None = None
     mercadopago_api_base: str = "https://api.mercadopago.com"
@@ -180,6 +197,9 @@ class Settings(BaseSettings):
     azure_temporal_container_name: str | None = None
     max_photo_bytes: int = Field(default=3_000_000, ge=1024, le=20_000_000)
     max_photos_per_letter: int = Field(default=6, ge=1, le=20)
+    # Tope del documento HTML adjunto al correo, ya en Base64. Por debajo de los 25 MB
+    # que rechazan casi todos los proveedores; las fotos que no caben se omiten.
+    max_letter_document_bytes: int = Field(default=24_000_000, ge=100_000, le=25_000_000)
 
     # --- Correo ---------------------------------------------------------------------
     mail_backend: Literal["console", "smtp"] = "console"
@@ -190,6 +210,28 @@ class Settings(BaseSettings):
     mail_from: str | None = None
     mail_timeout: int = Field(default=10, ge=1, le=60)
     mail_max_attempts: int = Field(default=3, ge=1, le=10)
+
+    # --- Cola de eventos (Azure Service Bus) ------------------------------------------
+    # Estrictamente opcionales: si faltan, `service_bus_enabled` es False y tanto la API
+    # como el worker aplican degradación elegante (escritura síncrona / worker inactivo).
+    # Nunca se valida su contenido en el arranque: una cadena mal formada degrada, no
+    # tumba el App Service.
+    azure_service_bus_connection_string: SecretStr | None = None
+    service_bus_queue_name: str | None = None
+    # Lote máximo por recepción. 12 escrituras por lote es el límite acordado para los
+    # 240 IOPS del disco de la B1ms; subirlo satura la base antes que la cola.
+    service_bus_max_batch: int = Field(default=12, ge=1, le=12)
+    service_bus_max_wait: int = Field(default=5, ge=1, le=60)
+    # Tope de la publicación desde la API. Publicar existe para responder rápido: si
+    # la cola tarda más que esto, se degrada a escritura síncrona en vez de dejar al
+    # comprador esperando por una infraestructura que no responde.
+    service_bus_send_timeout: float = Field(default=3.0, ge=0.5, le=30.0)
+    # Reintentos antes de mandar el mensaje a la dead-letter queue.
+    service_bus_max_attempts: int = Field(default=5, ge=1, le=20)
+    # Pool dedicado del worker. Tope 5 conexiones: quedan 15 del presupuesto para la API.
+    worker_db_pool_size: int = Field(default=5, ge=1, le=5)
+    worker_db_pool_timeout: int = Field(default=20, ge=1, le=60)
+    worker_idle_backoff: int = Field(default=5, ge=1, le=60)
 
     # --- Reglas de negocio -----------------------------------------------------------
     freeze_letter_after_publish: bool = True
@@ -238,15 +280,25 @@ class Settings(BaseSettings):
         elif self.cookie_samesite == "none":
             raise ValueError("SameSite=None requires secure cookies")
 
-        used = self.web_concurrency * self.app_replicas * (self.db_pool_size + self.db_max_overflow)
+        api = self.web_concurrency * self.app_replicas * (self.db_pool_size + self.db_max_overflow)
+        # El worker solo existe cuando hay cola: sin ella no reserva conexiones y el
+        # presupuesto de un despliegue ya en marcha no cambia.
+        worker = self.worker_db_pool_size if self.service_bus_enabled else 0
+        used = api + worker
         if used + self.db_reserved_connections > self.db_connection_budget:
             raise ValueError(
                 f"WEB_CONCURRENCY({self.web_concurrency}) x APP_REPLICAS"
                 f"({self.app_replicas}) x pool({self.db_pool_size + self.db_max_overflow})"
-                f" = {used}, mas {self.db_reserved_connections} reservadas, supera "
+                f" = {api}, mas WORKER_DB_POOL_SIZE={worker} y "
+                f"{self.db_reserved_connections} reservadas, supera "
                 f"DB_CONNECTION_BUDGET={self.db_connection_budget}"
             )
 
+        if self.payment_provider == "fake" and self.app_env != "local":
+            raise ValueError(
+                "PAYMENT_PROVIDER=fake aprueba cualquier pago sin cobrar: solo se admite "
+                "con APP_ENV=local. Usa 'mercadopago' en develop, staging y production"
+            )
         if self.payment_provider == "mercadopago" and not self.mercadopago_access_token:
             raise ValueError(
                 "MERCADOPAGO_ACCESS_TOKEN is required when PAYMENT_PROVIDER=mercadopago"
@@ -266,6 +318,16 @@ class Settings(BaseSettings):
                 "del App Service no conserva las fotos entre reinicios"
             )
         return self
+
+    @property
+    def service_bus_enabled(self) -> bool:
+        """Solo con las dos variables presentes se publica en la cola.
+
+        Es la única puerta de la arquitectura por eventos: si devuelve False, la API
+        guarda la carta de forma síncrona y el worker se queda inactivo, sin que el
+        arranque falle por una variable ausente.
+        """
+        return bool(self.azure_service_bus_connection_string and self.service_bus_queue_name)
 
     @property
     def secure_cookies(self) -> bool:

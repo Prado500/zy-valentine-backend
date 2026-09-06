@@ -19,6 +19,7 @@ from app.db.database import create_engine, session_factory
 from app.services.google import GoogleVerifier
 from app.services.mailer import build_mailer
 from app.services.payments import build_gateway
+from app.services.service_bus import build_publisher
 from app.services.storage import build_storage
 
 EXPECTED_REVISION = "0002_commerce"
@@ -37,10 +38,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.payments = build_gateway(settings)
         app.state.storage = build_storage(settings)
         app.state.mailer = build_mailer(settings)
+        # Publicador de cartas. Sin cola configurada devuelve un MockPublisher y la
+        # API sigue escribiendo de forma síncrona: el arranque nunca depende de él.
+        app.state.letter_queue = build_publisher(settings)
         try:
             yield
         finally:
             app.state.google_verifier.close()
+            await app.state.letter_queue.aclose()
             await app.state.payments.aclose()
             await app.state.engine.dispose()
 

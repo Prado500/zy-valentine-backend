@@ -3,6 +3,8 @@ name: zyvalentine-local
 services:
   db:
     image: postgres:15-alpine
+    ports:
+      - "5432:5432"
     environment:
       POSTGRES_USER: zy_local
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set a local-only POSTGRES_PASSWORD}

@@ -91,8 +91,54 @@ class LetterInput(Input):
         return value
 
 
+class TempPhotoRef(Input):
+    """Foto ya subida al contenedor efímero, pendiente de trasladar (eager upload).
+
+    ``tempId`` es la clave que devolvió ``POST /api/v1/letters/photos/eager``, no un
+    nombre libre: el patrón la ata a la forma ``temporal/<usuario>/<uuid>.<ext>``. Sin
+    esa restricción, un cliente podría pedir el traslado de un blob ajeno o escaparse
+    del contenedor con una ruta relativa.
+    """
+
+    tempId: str = Field(
+        min_length=16,
+        max_length=200,
+        pattern=r"^temporal/[0-9a-f\-]{36}/[0-9a-f]{32}\.(jpg|png|webp)$",
+    )
+    fileName: str = Field(min_length=1, max_length=200)
+    position: int | None = Field(default=None, ge=0, le=99)
+    # El frontend devuelve el mismo objeto que le entregó el eager upload, así que
+    # estos dos campos se aceptan para no obligarle a recortarlo. **No se usan**: el
+    # tipo se deduce de la extensión que puso el servidor y el tamaño lo devuelve el
+    # traslado del blob. Un cliente no decide qué hay dentro de un archivo.
+    contentType: str | None = Field(default=None, max_length=64)
+    byteSize: int | None = Field(default=None, ge=0)
+
+    @field_validator("fileName")
+    @classmethod
+    def clean_name(cls, value: str) -> str:
+        # El nombre original acaba en `caption`, que se muestra en el visor y en el
+        # correo: se limpia igual que cualquier otro texto de la carta.
+        value = _clean_text(value).strip()
+        if not value:
+            raise ValueError("File name cannot be blank")
+        return value
+
+
+class EagerPhotoResponse(BaseModel):
+    """Acuse del eager upload. `tempId` es lo que el frontend adjunta a la carta."""
+
+    tempId: str
+    fileName: str
+    contentType: str
+    byteSize: int
+
+
 class LetterCreate(LetterInput):
     purchaseId: uuid.UUID
+    # Fotos subidas en caliente antes de crear la carta. El worker las traslada al
+    # contenedor permanente (IOP #6); aquí solo viajan sus referencias.
+    temp_photos: list[TempPhotoRef] = Field(default_factory=list, max_length=20)
 
 
 class LetterUpdate(LetterInput):
@@ -100,6 +146,18 @@ class LetterUpdate(LetterInput):
     recipientName: str | None = Field(default=None, min_length=1, max_length=120)
     body: str | None = Field(default=None, min_length=1, max_length=5000)
     theme: str | None = Field(default=None, max_length=32, pattern=r"^[a-z0-9\-]+$")
+
+
+class LetterQueued(BaseModel):
+    """Respuesta 202 del camino por eventos: la carta aún no existe en la base.
+
+    El frontend debe consultar ``GET /api/v1/letters`` (o la compra) para ver la carta
+    cuando el worker la haya escrito; ``hasLetter`` de la compra es la señal.
+    """
+
+    status: str = "queued"
+    purchaseId: uuid.UUID
+    message: str = "Tu carta está en proceso; te avisaremos por correo al terminar."
 
 
 class PhotoResponse(BaseModel):
@@ -160,6 +218,16 @@ class PublicLetterResponse(BaseModel):
     theme: str
     photos: list[PublicPhoto]
     publishedAt: datetime
+
+
+class CommerceHealth(BaseModel):
+    """Diagnóstico de integraciones. Nombres de modo, nunca credenciales ni URLs."""
+
+    paymentProvider: str
+    storageBackend: str
+    mailBackend: str
+    letterQueue: str
+    freezeAfterPublish: bool
 
 
 class ResendInput(Input):

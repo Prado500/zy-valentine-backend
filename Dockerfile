@@ -3,6 +3,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 WORKDIR /app
 COPY pyproject.toml requirements.lock README.md ./
 COPY app ./app
+# worker.py forma parte del artefacto: es el consumidor de la cola de cartas.
+COPY worker.py ./
 COPY alembic ./alembic
 COPY alembic.ini ./
 # El extra azure se instala siempre: develop/staging/production exigen

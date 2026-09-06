@@ -1,12 +1,16 @@
-from anyio import to_thread
-from fastapi import APIRouter, Depends, Request, Response
-from sqlalchemy import delete
-from sqlalchemy.ext.asyncio import AsyncSession
+"""HTTP de autenticación: CSRF, registro, sesión y cierre de sesión.
 
-from app.api.dependencies import auth_limit, csrf_guard, current_user, get_db
-from app.core.errors import ApiError
-from app.core.security import digest, issue_csrf
-from app.models.user import AuthSession, User
+Igual que el router comercial, aquí no entra ni la sesión de base de datos ni los
+repositorios: eso lo lleva ``AccountService``. Lo que sí se queda es la gestión de
+cookies, que es protocolo puro —``HttpOnly``, ``Secure``, ``SameSite`` y el prefijo
+``__Host-``— y no tiene sentido fuera de HTTP.
+"""
+
+from fastapi import APIRouter, Depends, Request, Response
+
+from app.api.dependencies import account_service, auth_limit, csrf_guard, current_user
+from app.core.security import issue_csrf
+from app.models.user import User
 from app.schemas.auth import (
     CsrfResponse,
     GoogleLogin,
@@ -15,7 +19,7 @@ from app.schemas.auth import (
     Register,
     UserResponse,
 )
-from app.services import auth
+from app.services.accounts import AccountService
 
 router = APIRouter(prefix="/api/v1", tags=["Authentication"])
 
@@ -32,6 +36,14 @@ def set_cookie(response, settings, name, value, max_age):
     )
 
 
+async def finish_login(user: User, request: Request, response: Response, service: AccountService):
+    """Abre la sesión y deja su token en la cookie. El token nunca viaja en el cuerpo."""
+    settings = request.app.state.settings
+    token = await service.open_session(user, request.cookies.get(settings.session_cookie))
+    set_cookie(response, settings, settings.session_cookie, token, settings.session_minutes * 60)
+    return user
+
+
 @router.get("/auth/csrf", response_model=CsrfResponse)
 async def csrf(request: Request, response: Response):
     settings = request.app.state.settings
@@ -46,17 +58,8 @@ async def csrf(request: Request, response: Response):
     status_code=201,
     dependencies=[Depends(csrf_guard), Depends(auth_limit)],
 )
-async def register(payload: Register, request: Request, db: AsyncSession = Depends(get_db)):
-    return await auth.register(db, payload, request.app.state.hash_limiter)
-
-
-async def finish_login(user, request, response, db):
-    settings = request.app.state.settings
-    token = await auth.new_session(
-        db, user, request.cookies.get(settings.session_cookie), settings.session_minutes
-    )
-    set_cookie(response, settings, settings.session_cookie, token, settings.session_minutes * 60)
-    return user
+async def register(payload: Register, service: AccountService = Depends(account_service)):
+    return await service.register(payload)
 
 
 @router.post(
@@ -65,10 +68,12 @@ async def finish_login(user, request, response, db):
     dependencies=[Depends(csrf_guard), Depends(auth_limit)],
 )
 async def login(
-    payload: Login, request: Request, response: Response, db: AsyncSession = Depends(get_db)
+    payload: Login,
+    request: Request,
+    response: Response,
+    service: AccountService = Depends(account_service),
 ):
-    user = await auth.login(db, payload, request.app.state.hash_limiter)
-    return await finish_login(user, request, response, db)
+    return await finish_login(await service.login(payload), request, response, service)
 
 
 @router.post("/auth/google", response_model=UserResponse, dependencies=[Depends(auth_limit)])
@@ -77,20 +82,10 @@ async def google(
     request: Request,
     response: Response,
     nonce: str = Depends(csrf_guard),
-    db: AsyncSession = Depends(get_db),
+    service: AccountService = Depends(account_service),
 ):
-    settings = request.app.state.settings
-    if not settings.google_client_id:
-        raise ApiError(503, "GOOGLE_NOT_CONFIGURED", "Google todavía no está configurado.")
-    claims = await to_thread.run_sync(
-        request.app.state.google_verifier.verify,
-        payload.credential,
-        settings.google_client_id,
-        nonce,
-        limiter=request.app.state.google_limiter,
-    )
-    user = await auth.google_user(db, claims)
-    return await finish_login(user, request, response, db)
+    user = await service.google_login(payload, nonce)
+    return await finish_login(user, request, response, service)
 
 
 @router.get("/me", response_model=UserResponse)
@@ -99,12 +94,13 @@ async def me(user: User = Depends(current_user)):
 
 
 @router.post("/auth/logout", response_model=MessageResponse, dependencies=[Depends(csrf_guard)])
-async def logout(request: Request, response: Response, db: AsyncSession = Depends(get_db)):
+async def logout(
+    request: Request,
+    response: Response,
+    service: AccountService = Depends(account_service),
+):
     settings = request.app.state.settings
-    token = request.cookies.get(settings.session_cookie)
-    if token:
-        await db.execute(delete(AuthSession).where(AuthSession.token_hash == digest(token)))
-        await db.commit()
+    await service.close_session(request.cookies.get(settings.session_cookie))
     response.delete_cookie(
         settings.session_cookie,
         path="/",

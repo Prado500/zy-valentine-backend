@@ -3,18 +3,92 @@
 Cada intento crea una fila en ``letter_deliveries`` con su propio estado. Ningún
 camino de este módulo crea compras ni cartas, de modo que reenviar una carta no
 consume otra compra.
+
+El correo lleva adjunto el documento HTML autónomo (IOP #7). Las fotos se descargan del
+almacenamiento permanente y se incrustan en Base64; ambas cosas ocurren fuera del bucle
+de eventos —el backend de almacenamiento ya usa ``to_thread``, y el armado del documento
+se delega explícitamente a ``anyio.to_thread.run_sync``— para que un correo con seis
+fotos no bloquee al worker mientras codifica megabytes.
 """
 
+import logging
 from datetime import UTC, datetime
+from functools import partial
 
+from anyio import to_thread
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings
 from app.core.errors import ApiError
-from app.models.commerce import Letter, LetterDelivery
+from app.core.html import safe_file_name
+from app.models.commerce import Letter, LetterDelivery, LetterPhoto
+from app.repositories import commerce
 from app.services.letters import public_url
-from app.services.mailer import Mailer, render_letter_email
+from app.services.mailer import Attachment, Mailer, render_letter_document, render_letter_email
 from app.services.qr import qr_data_uri
+from app.services.storage import StorageBackend
+
+LOG = logging.getLogger("app.deliveries")
+
+
+def document_name(letter: Letter) -> str:
+    """Nombre del adjunto: reconocible en la bandeja de entrada y sin rutas.
+
+    El título lo escribe el comprador y acaba en una cabecera MIME, así que pasa por
+    la lista blanca de :func:`app.core.html.safe_file_name`: sin barras, sin comillas
+    y sin saltos de línea que pudieran partir la cabecera.
+    """
+    return f"{safe_file_name(letter.title, fallback='carta')}.html"
+
+
+async def build_document(
+    settings: Settings,
+    storage: StorageBackend | None,
+    letter: Letter,
+    photos: list[LetterPhoto],
+    url: str,
+) -> Attachment | None:
+    """Descarga las fotos y arma el documento autónomo. Nunca rompe la entrega.
+
+    Si el almacenamiento no está disponible o una foto se perdió, se registra y el
+    correo sale igual con enlace y QR: el adjunto es un extra, no la carta.
+    """
+    if storage is None:
+        return None
+    loaded: list[tuple[str, str, bytes]] = []
+    for photo in photos:
+        try:
+            data = await storage.get(photo.storage_key)
+        except Exception as error:  # noqa: BLE001 - una foto ausente no cancela el correo
+            LOG.warning(
+                "Foto %s no disponible para el adjunto (%s)", photo.id, type(error).__name__
+            )
+            continue
+        loaded.append((photo.caption or "", photo.content_type, data))
+    try:
+        # El Base64 y el armado del HTML son CPU sobre bytes: van a un hilo aparte.
+        html = await to_thread.run_sync(
+            partial(
+                render_letter_document,
+                title=letter.title,
+                recipient_name=letter.recipient_name,
+                body=letter.body,
+                public_url=url,
+                qr_source=qr_data_uri(url),
+                photos=loaded,
+                letter_id=str(letter.id),
+                version=letter.published_version,
+                max_bytes=settings.max_letter_document_bytes,
+            )
+        )
+    except Exception as error:  # noqa: BLE001 - idem: el adjunto es opcional
+        LOG.warning("No se pudo generar el documento adjunto (%s)", type(error).__name__)
+        return None
+    content = html.encode("utf-8")
+    if len(content) > settings.max_letter_document_bytes:  # pragma: no cover - red de seguridad
+        LOG.warning("Documento de la carta %s descartado por tamaño", letter.id)
+        return None
+    return Attachment(filename=document_name(letter), content=content)
 
 
 async def deliver(
@@ -23,6 +97,7 @@ async def deliver(
     mailer: Mailer,
     letter: Letter,
     recipient: str | None = None,
+    storage: StorageBackend | None = None,
 ) -> LetterDelivery:
     if letter.status != "published":
         raise ApiError(409, "LETTER_NOT_PUBLISHED", "Publica la carta antes de enviarla.")
@@ -41,6 +116,8 @@ async def deliver(
     await db.commit()
     await db.refresh(delivery)
 
+    photos = await commerce.photos_of_letter(db, letter.id)
+    attachment = await build_document(settings, storage, letter, photos, url)
     message = render_letter_email(
         to=address,
         recipient_name=letter.recipient_name,
@@ -49,6 +126,7 @@ async def deliver(
         qr_source=qr_data_uri(url),
         letter_id=str(letter.id),
         version=letter.published_version,
+        attachments=(attachment,) if attachment else (),
     )
     delivery.attempts += 1
     try:

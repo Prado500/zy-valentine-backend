@@ -10,9 +10,11 @@ Concurrencia y idempotencia:
   compra desde este módulo.
 """
 
+import logging
 import secrets
 import uuid
 from datetime import UTC, datetime
+from pathlib import Path
 
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
@@ -20,11 +22,22 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings
 from app.core.errors import ApiError
+from app.core.html import sanitize
 from app.models.commerce import Letter, LetterPhoto
 from app.models.user import User
 from app.repositories import commerce
-from app.schemas.commerce import LetterCreate, LetterUpdate
-from app.services.storage import ALLOWED_CONTENT_TYPES, StorageBackend, sniff_content_type
+from app.schemas.commerce import LetterCreate, LetterUpdate, TempPhotoRef
+from app.services.service_bus import LetterPublisher, build_letter_message
+from app.services.storage import (
+    ALLOWED_CONTENT_TYPES,
+    StorageBackend,
+    content_type_of,
+    sniff_content_type,
+    temp_key,
+    temp_key_owner,
+)
+
+LOG = logging.getLogger("app.letters")
 
 
 def is_frozen(letter: Letter, settings: Settings) -> bool:
@@ -80,6 +93,178 @@ async def create(
             raise ApiError(409, "LETTER_CONFLICT", "No se pudo crear la carta.")
         return existing, False
     return await db.get(Letter, created_id), True
+
+
+async def enqueue(
+    db: AsyncSession,
+    settings: Settings,
+    queue: LetterPublisher,
+    user: User,
+    payload: LetterCreate,
+) -> bool:
+    """IOP #5: valida en caliente y publica en la cola. Devuelve si quedó encolada.
+
+    Antes de encolar nada se consulta la base de forma síncrona y se aborta si la
+    compra no existe, no es de esta cuenta, no está pagada o **ya tiene carta**: los
+    tres casos responden 4xx sin escribir nada. Son dos SELECT por índice, el precio
+    mínimo para que la cola no acepte órdenes fraudulentas.
+
+    ``False`` significa que el transporte no aceptó el mensaje; el llamador cae al
+    camino síncrono en vez de perder la carta del comprador. No se toma ``FOR UPDATE``:
+    la unicidad de ``letters.purchase_id`` sigue siendo la garantía final y el bloqueo
+    lo toma el worker al insertar.
+    """
+    purchase = await commerce.owned_purchase(db, payload.purchaseId, user.id)
+    if purchase is None:
+        raise ApiError(404, "PURCHASE_NOT_FOUND", "La compra no existe para esta cuenta.")
+    if purchase.status != "paid":
+        raise ApiError(409, "PURCHASE_NOT_PAID", "La compra aún no está confirmada por el pago.")
+    if await commerce.letter_of_purchase(db, purchase.id):
+        # Antitrampa: volver atrás en el navegador y reenviar el formulario no habilita
+        # una segunda carta. Se corta aquí, antes de encolar: si la orden entrase en la
+        # cola, el fraude se detectaría tarde y habría gastado IOPS del worker.
+        raise ApiError(409, "LETTER_ALREADY_EXISTS", "Esta compra ya tiene su carta.")
+    if len(payload.temp_photos) > settings.max_photos_per_letter:
+        raise ApiError(409, "PHOTO_LIMIT_REACHED", "Se alcanzó el máximo de fotos.")
+    for photo in payload.temp_photos:
+        # Una clave efímera solo la puede reclamar quien la subió.
+        if temp_key_owner(photo.tempId) != str(user.id):
+            raise ApiError(403, "TEMP_PHOTO_FORBIDDEN", "Esa foto temporal no es de esta cuenta.")
+    message = build_letter_message(user.id, payload)
+    # message_id derivado de la compra: con detección de duplicados activa en la cola,
+    # dos pestañas encolan una sola carta.
+    return await queue.publish(message, message_id=f"letter-{payload.purchaseId}")
+
+
+async def eager_upload(
+    settings: Settings,
+    storage: StorageBackend,
+    user: User,
+    data: bytes,
+    declared_type: str | None,
+    file_name: str | None,
+) -> dict:
+    """Sube la foto al espacio efímero antes de que la carta exista (eager upload).
+
+    Se valida lo mismo que en el camino clásico —tamaño y firma binaria real, no el
+    header del cliente— porque esto ocurre sin carta y sin compra verificada: el
+    contenedor temporal no puede convertirse en un almacén de archivos arbitrarios.
+    """
+    if not data:
+        raise ApiError(422, "EMPTY_PHOTO", "El archivo está vacío.")
+    if len(data) > settings.max_photo_bytes:
+        raise ApiError(413, "PHOTO_TOO_LARGE", "La foto supera el tamaño permitido.")
+    content_type = sniff_content_type(data, declared_type)
+    key = temp_key(user.id, content_type)
+    await storage.put_temp(key, data, content_type)
+    return {
+        "tempId": key,
+        # El nombre lo elige quien sube el archivo y acaba en `caption`, en el visor
+        # y en el correo: se limpia aquí de controles y separadores, igual que hace
+        # `TempPhotoRef` al recibirlo de vuelta.
+        "fileName": sanitize(file_name or "").strip()[:200] or "foto",
+        "contentType": content_type,
+        "byteSize": len(data),
+    }
+
+
+def permanent_key(letter: Letter, ref: TempPhotoRef) -> str:
+    """Destino definitivo de una foto temporal. **Determinista a propósito.**
+
+    Deriva del identificador que ya lleva la clave efímera, no de un UUID nuevo. Así
+    dos entregas del mismo mensaje calculan la misma ruta, y el traslado se puede
+    reintentar sin duplicar la foto ni perderla: quien reintenta reconoce lo que ya
+    hizo el intento anterior.
+    """
+    stem = Path(ref.tempId).stem
+    return f"letters/{letter.id}/{stem}{ALLOWED_CONTENT_TYPES[content_type_of(ref.tempId)]}"
+
+
+def ordered_refs(refs: list[TempPhotoRef]) -> list[TempPhotoRef]:
+    """Ordena por la posición pedida y, a falta de ella, por el orden de llegada.
+
+    La posición final la asigna el servidor con este orden. Si se copiara el número
+    que manda el cliente, dos fotos podrían reclamar la misma posición y romper
+    ``uq_letter_photos_position`` con un 409 que el comprador no puede arreglar.
+    """
+    return [
+        ref
+        for _, ref in sorted(
+            enumerate(refs),
+            key=lambda pair: pair[1].position if pair[1].position is not None else pair[0],
+        )
+    ]
+
+
+async def attach_temp_photos(
+    db: AsyncSession,
+    settings: Settings,
+    storage: StorageBackend,
+    letter: Letter,
+    refs: list[TempPhotoRef],
+) -> list[LetterPhoto]:
+    """IOP #6: traslada del contenedor efímero al permanente y registra las filas.
+
+    Reentrante frente a una reentrega del mensaje. Cada foto tiene un destino
+    determinista (:func:`permanent_key`), así que un segundo intento:
+
+    - salta las que ya tienen fila,
+    - reconoce las que ya se movieron pero no llegaron a guardarse (el propio
+      ``move_blob`` devuelve el tamaño del destino cuando el origen ya no está),
+    - y **omite** las que se perdieron, en vez de tumbar el mensaje entero: una carta
+      pagada debe salir aunque falte una foto, y volver a intentarlo no la traería.
+
+    El nombre original del archivo se guarda en ``caption`` para que el comprador
+    reconozca su foto en el visor y en el correo.
+    """
+    if not refs:
+        return []
+    existing = await commerce.photos_of_letter(db, letter.id)
+    known = {photo.storage_key for photo in existing}
+    taken = {photo.position for photo in existing}
+    pending = ordered_refs(refs)[: settings.max_photos_per_letter]
+
+    photos: list[LetterPhoto] = []
+    position = 0
+    for ref in pending:
+        if temp_key_owner(ref.tempId) != str(letter.user_id):
+            raise ApiError(403, "TEMP_PHOTO_FORBIDDEN", "Esa foto temporal no es de esta cuenta.")
+        key = permanent_key(letter, ref)
+        if key in known:
+            continue  # Ya trasladada y registrada en una entrega anterior.
+        while position in taken:
+            position += 1
+        try:
+            size = await storage.move_blob(ref.tempId, key)
+        except ApiError as error:
+            if error.status_code != 404:
+                raise
+            # La foto ya no está ni en el temporal ni en el permanente. Se registra y
+            # se sigue: la carta y su correo valen más que la foto perdida.
+            LOG.warning("Foto temporal ausente para la carta %s; se omite", letter.id)
+            continue
+        photos.append(
+            LetterPhoto(
+                letter_id=letter.id,
+                position=position,
+                storage_key=key,
+                content_type=content_type_of(ref.tempId),
+                byte_size=size,
+                caption=ref.fileName[:200],
+            )
+        )
+        taken.add(position)
+    if not photos:
+        return existing
+    db.add_all(photos)
+    try:
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        raise ApiError(409, "PHOTO_POSITION_TAKEN", "Dos fotos piden la misma posición.") from None
+    for photo in photos:
+        await db.refresh(photo)
+    return existing + photos
 
 
 async def update(

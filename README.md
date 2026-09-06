@@ -27,6 +27,25 @@ Documentos: [guía técnica](docs/GUIA_TECNICA.md),
 `ecotur-asoprado-api` es solo referencia de organización; no se modificó, igual que
 `Iops.md` y los pipelines.
 
+## Arquitectura por capas
+
+```
+app/api/routers/      HTTP y nada más: estado, cabeceras, cookies y CSRF
+app/api/dependencies  la frontera: abre la sesión y arma los servicios
+app/services/commerce CommerceService  -> orquesta el dominio comercial
+app/services/accounts AccountService   -> orquesta registro y sesión
+app/services/*        reglas de negocio (letters, purchases, deliveries, identity)
+app/repositories/     SQLAlchemy 2.0; ningún SQL vive fuera de aquí
+app/models/           modelos declarativos
+alembic/              migraciones (nunca `Base.metadata.create_all`)
+```
+
+Regla que se aplica al pie de la letra: **un router jamás recibe una `AsyncSession`
+ni llama a un repositorio.** Recibe el servicio ya montado y devuelve el esquema
+Pydantic que este arma. `worker.py` entra por la misma puerta —`CommerceService`—,
+así que la cola y la API ejecutan exactamente la misma orquestación en vez de dos
+copias que se van separando con el tiempo.
+
 ## Endpoints
 
 ### Base y autenticación
@@ -51,7 +70,8 @@ Documentos: [guía técnica](docs/GUIA_TECNICA.md),
 | `GET /api/v1/purchases`, `GET /api/v1/purchases/{id}` | Compras propias con estado y `hasLetter` |
 | `POST /api/v1/purchases/{id}/verify` | **Verificación en servidor** del pago |
 | `POST /api/v1/webhooks/mercadopago` | Webhook firmado, idempotente y monótono |
-| `POST /api/v1/letters` | Crea la carta de una compra pagada (200 si ya existía) |
+| `POST /api/v1/letters/photos/eager` | Sube una foto al contenedor efímero antes de crear la carta |
+| `POST /api/v1/letters` | Crea la carta de una compra pagada (202 con cola; 200 si ya existía) |
 | `GET /api/v1/letters`, `GET /api/v1/letters/{id}` | "Mis cartas": pago, entrega y borradores |
 | `PATCH /api/v1/letters/{id}` | Edita solo mientras sea borrador |
 | `POST`/`DELETE /api/v1/letters/{id}/photos…` | Fotos ordenadas, validadas por firma binaria |
@@ -121,6 +141,83 @@ Compose crea su propia base, no publica el puerto de PostgreSQL y expone la API 
 `127.0.0.1:8000`. Las fotos van a un volumen propio. No pongas un `DATABASE_URL` remoto
 en Compose. Verificado en Linux con PostgreSQL 15 y la imagen construida.
 
+## Pagos en local (`PAYMENT_PROVIDER=fake`)
+
+Para recorrer el flujo comercial completo sin credenciales de Mercado Pago:
+
+```bash
+PAYMENT_PROVIDER=fake  # solo con APP_ENV=local
+```
+
+Aprueba cualquier `paymentId` numérico por el importe exacto de la compra, así que
+`POST /api/v1/purchases/{id}/verify` la deja en `paid` y el editor se desbloquea. El
+proveedor real no cambia: se verifica en servidor, igual que en producción.
+
+Es una puerta abierta, y por eso tiene dos candados independientes: la aplicación
+**no arranca** si `PAYMENT_PROVIDER=fake` con `APP_ENV` distinto de `local`, y
+`build_gateway` lo vuelve a comprobar antes de instanciarlo. Al arrancar deja un
+aviso en el log: `Proveedor de pagos de LABORATORIO activo`.
+
+## Cola de cartas (Azure Service Bus)
+
+Escribir la carta dentro de la petición ata la latencia del comprador a los 240 IOPS
+del disco de la B1ms. Con la cola configurada, `POST /api/v1/letters` valida la compra
+(IOP #5), publica el mensaje y responde **202** sin escribir; `worker.py` hace el INSERT
+y dispara el correo (IOP #6 y #7).
+
+| Variable | Efecto |
+| --- | --- |
+| `AZURE_SERVICE_BUS_CONNECTION_STRING` | Cadena de la política de la cola. **Opcional.** |
+| `SERVICE_BUS_QUEUE_NAME` | Cola de cartas. **Opcional.** |
+| `SERVICE_BUS_MAX_BATCH` | Mensajes por lote; tope 12 (240 IOPS del disco). |
+| `SERVICE_BUS_MAX_ATTEMPTS` | Entregas antes de la dead-letter queue. |
+| `WORKER_DB_POOL_SIZE` | Pool del worker; tope 5 de las 20 conexiones. |
+
+**Degradación elegante.** Las dos primeras variables son estrictamente opcionales: si
+falta cualquiera de ellas, la API arranca igual, `build_publisher` devuelve un
+`MockPublisher` inofensivo y la carta se escribe de forma síncrona, exactamente como
+antes. Si la cola está configurada pero falla en caliente, el endpoint también cae al
+camino síncrono en vez de perder la carta. `GET /api/v1/health/commerce` muestra el modo
+activo en `letterQueue` (`service-bus` o `sync`).
+
+Reparto de conexiones: la validación de arranque suma el pool del worker al presupuesto
+**solo cuando la cola está configurada**, así que activarla no cambia el cálculo de un
+despliegue que ya está en marcha.
+
+Ejecutar el consumidor:
+
+```bash
+python worker.py     # sin cola configurada informa y termina con código 0
+```
+
+### Recorrido completo de una carta
+
+1. **Eager upload.** Mientras el comprador elige fotos, el frontend las sube una a una a
+   `POST /api/v1/letters/photos/eager`. Van al contenedor efímero y no gastan ni una
+   escritura en PostgreSQL. La respuesta trae `tempId`, que es lo que hay que devolver.
+2. **Envío del formulario (IOP #4 y #5).** `POST /api/v1/letters` recibe la carta con
+   `temp_photos: [{tempId, fileName}]`, comprueba en la base que la compra existe, es de
+   esta cuenta, está pagada y **no tiene carta**, y publica el mensaje: **202**. Si la
+   compra no está pagada o ya tiene carta responde **409** sin encolar nada, así que
+   retroceder en el navegador no consigue una segunda carta.
+3. **Worker (IOP #6).** Escribe la carta, traslada cada foto del contenedor efímero al
+   permanente con `move_blob` y guarda el nombre original del archivo en `caption`.
+4. **Correo (IOP #7).** Publica la carta y envía el correo: enlace y QR en el cuerpo, y
+   adjunto un documento HTML autónomo con las fotos incrustadas en Base64 (tope
+   `MAX_LETTER_DOCUMENT_BYTES`, por debajo de los 25 MB). La descarga y el Base64 se
+   ejecutan fuera del bucle de eventos con `anyio.to_thread.run_sync`.
+
+El contenedor efímero es `AZURE_TEMPORAL_CONTAINER_NAME` con `STORAGE_BACKEND=azure` y
+la carpeta `<LOCAL_STORAGE_DIR>/_temporal` con `STORAGE_BACKEND=local`: un desarrollador
+prueba el flujo entero sin credenciales de nube. Si no se declara el contenedor
+temporal, el permanente hace de los dos bajo el prefijo `temporal/`.
+
+El worker recibe lotes de 12 mensajes como máximo, los procesa con como mucho 5
+operaciones simultáneas y no empieza el siguiente lote hasta terminar el anterior. Un
+mensaje que falla nunca rompe el bucle: los errores permanentes (JSON inválido, compra
+inexistente o sin pagar, comprador inactivo) van a la dead-letter queue, y los
+transitorios se abandonan para su reentrega hasta `SERVICE_BUS_MAX_ATTEMPTS`.
+
 ## Pruebas y Postman
 
 El runner crea su propio PostgreSQL efímero (contenedor Docker o binarios locales),
@@ -142,6 +239,26 @@ Mercado Pago, Azure ni correo reales. `Google manual` y `Commerce manual` requie
 integraciones configuradas y no se ejecutan automáticamente.
 
 [Resultados y límites](specs/002-comercio/validation.md).
+
+
+### Cobertura y qué se ejecuta sin PostgreSQL
+
+Cada funcionalidad nueva lleva cinco casos —camino feliz, camino triste, dos
+fronteras y manejo de excepciones—, agrupados por archivo:
+
+| Archivo | Cubre |
+|---|---|
+| `test_eager_upload.py` | subida anticipada: tipos falsificados, tamaño exacto, concurrencia, Azure caído |
+| `test_photo_transfer.py` | traslado al permanente: reentrega, blob borrado, límite de fotos |
+| `test_service_bus.py` | publicación: sobre JSON, un solo *sender*, tiempo de espera, degradación |
+| `test_worker.py` | ciclo del mensaje: completar, reintentar, dead-letter, lote de 12 |
+| `test_mailer_security.py` | XSS en el documento y en el correo, inyección de cabeceras |
+| `test_storage.py` | rutas fuera de la raíz, traslado idempotente, backend de Azure |
+| `test_payments_lab.py` | proveedor de laboratorio y sus dos candados |
+
+Sin `TEST_DATABASE_URL` se ejecutan 163 pruebas y se omiten las de integración; con
+la base levantada son 268. **El pipeline levanta PostgreSQL como contenedor de
+servicio**, así que en el PR corren las 268.
 
 ## Coordinación con infraestructura
 

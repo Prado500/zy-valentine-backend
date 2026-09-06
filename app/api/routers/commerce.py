@@ -1,112 +1,49 @@
-"""HTTP del dominio comercial: identidad privada, compras, cartas, fotos, QR y correo."""
+"""HTTP del dominio comercial: identidad privada, compras, cartas, fotos, QR y correo.
+
+Esta capa **solo** traduce HTTP. Recibe la petición, se la pasa a
+``CommerceService`` y devuelve el esquema Pydantic que este arma. No conoce la
+sesión de base de datos, no llama a repositorios y no decide reglas de negocio: si
+un endpoint necesita saber algo de la base, lo pide al servicio.
+
+Lo único que se queda aquí es lo que es HTTP de verdad: el código de estado, las
+cabeceras, el tipo de contenido de las respuestas binarias y las dependencias de
+sesión y CSRF.
+"""
 
 import uuid
 
 from fastapi import APIRouter, Depends, File, Form, Request, Response, UploadFile
-from fastapi.responses import JSONResponse
-from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.dependencies import csrf_guard, current_user, get_db
-from app.core.errors import ApiError
-from app.models.commerce import Letter
+from app.api.dependencies import commerce_service, csrf_guard, current_user
 from app.models.user import User
-from app.repositories import commerce as repo
 from app.schemas.commerce import (
+    CommerceHealth,
     DeliveryResponse,
+    EagerPhotoResponse,
     IdentityDocumentInput,
     IdentityDocumentResponse,
     LetterCreate,
+    LetterQueued,
     LetterResponse,
     LetterUpdate,
-    PaymentResponse,
     PaymentVerifyInput,
     PhotoResponse,
     PublicLetterResponse,
-    PublicPhoto,
     PurchaseCreate,
     PurchaseResponse,
     PurchaseVerification,
     ResendInput,
 )
-from app.services import deliveries, identity, letters, purchases, webhooks
+from app.services.commerce import BinaryContent, CommerceService
 
 router = APIRouter(prefix="/api/v1", tags=["Commerce"])
 public_router = APIRouter(prefix="/api/v1/public", tags=["Public"])
 webhook_router = APIRouter(prefix="/api/v1/webhooks", tags=["Webhooks"])
 
 
-def settings_of(request: Request):
-    return request.app.state.settings
-
-
-def purchase_payload(purchase, has_letter: bool) -> PurchaseResponse:
-    return PurchaseResponse(
-        id=purchase.id,
-        status=purchase.status,
-        amountCents=purchase.amount_cents,
-        currency=purchase.currency,
-        externalReference=purchase.external_reference,
-        checkoutUrl=purchase.checkout_url,
-        hasLetter=has_letter,
-        paidAt=purchase.paid_at,
-        expiresAt=purchase.expires_at,
-        createdAt=purchase.created_at,
-    )
-
-
-async def letter_payload(db: AsyncSession, settings, letter: Letter) -> LetterResponse:
-    photos = await repo.photos_of_letter(db, letter.id)
-    sent = await repo.deliveries_of_letter(db, letter.id)
-    url = letters.public_url(settings, letter)
-    return LetterResponse(
-        id=letter.id,
-        purchaseId=letter.purchase_id,
-        status=letter.status,
-        title=letter.title,
-        recipientName=letter.recipient_name,
-        recipientEmail=letter.recipient_email,
-        body=letter.body,
-        theme=letter.theme,
-        publicSlug=letter.public_slug if letter.status == "published" else None,
-        publicUrl=url,
-        qrUrl=f"{settings.public_base_url}/api/v1/letters/{letter.id}/qr.png" if url else None,
-        publishedVersion=letter.published_version,
-        publishedAt=letter.published_at,
-        frozen=letters.is_frozen(letter, settings),
-        photos=[
-            PhotoResponse(
-                id=photo.id,
-                position=photo.position,
-                caption=photo.caption,
-                contentType=photo.content_type,
-                byteSize=photo.byte_size,
-                url=f"/api/v1/letters/{letter.id}/photos/{photo.id}/content",
-            )
-            for photo in photos
-        ],
-        deliveries=[
-            DeliveryResponse(
-                id=item.id,
-                recipientEmail=item.recipient_email,
-                status=item.status,
-                attempts=item.attempts,
-                letterVersion=item.letter_version,
-                lastError=item.last_error,
-                sentAt=item.sent_at,
-                createdAt=item.created_at,
-            )
-            for item in sent
-        ],
-        createdAt=letter.created_at,
-        updatedAt=letter.updated_at,
-    )
-
-
-async def owned_letter(db: AsyncSession, letter_id: uuid.UUID, user: User) -> Letter:
-    letter = await repo.owned_letter(db, letter_id, user.id)
-    if letter is None:
-        raise ApiError(404, "LETTER_NOT_FOUND", "La carta no existe para esta cuenta.")
-    return letter
+def binary(content: BinaryContent) -> Response:
+    """Respuesta de bytes. Es lo único que no puede ser un esquema Pydantic."""
+    return Response(content=content.content, media_type=content.media_type)
 
 
 # --- Identidad privada ---------------------------------------------------------------
@@ -119,30 +56,18 @@ async def owned_letter(db: AsyncSession, letter_id: uuid.UUID, user: User) -> Le
 )
 async def set_identity_document(
     payload: IdentityDocumentInput,
-    request: Request,
     user: User = Depends(current_user),
-    db: AsyncSession = Depends(get_db),
+    service: CommerceService = Depends(commerce_service),
 ):
-    record = await identity.set_document(db, settings_of(request), user, payload)
-    return IdentityDocumentResponse(
-        documentType=record.document_type,
-        documentLast4=record.document_last4,
-        createdAt=record.created_at,
-    )
+    return await service.set_identity_document(user, payload)
 
 
 @router.get("/me/identity-document", response_model=IdentityDocumentResponse)
 async def get_identity_document(
-    user: User = Depends(current_user), db: AsyncSession = Depends(get_db)
+    user: User = Depends(current_user),
+    service: CommerceService = Depends(commerce_service),
 ):
-    record = await repo.identity_by_user(db, user.id)
-    if record is None:
-        raise ApiError(404, "DOCUMENT_NOT_FOUND", "No hay documento registrado.")
-    return IdentityDocumentResponse(
-        documentType=record.document_type,
-        documentLast4=record.document_last4,
-        createdAt=record.created_at,
-    )
+    return await service.identity_document(user)
 
 
 # --- Compras y pagos -----------------------------------------------------------------
@@ -151,37 +76,31 @@ async def get_identity_document(
 @router.post("/purchases", response_model=PurchaseResponse, dependencies=[Depends(csrf_guard)])
 async def create_purchase(
     payload: PurchaseCreate,
-    request: Request,
     response: Response,
     user: User = Depends(current_user),
-    db: AsyncSession = Depends(get_db),
+    service: CommerceService = Depends(commerce_service),
 ):
-    purchase, created = await purchases.create_intent(
-        db, settings_of(request), request.app.state.payments, user, payload
-    )
-    response.status_code = 201 if created else 200
-    letter = await repo.letter_of_purchase(db, purchase.id)
-    return purchase_payload(purchase, letter is not None)
+    """201 con una compra nueva; 200 si la clave de idempotencia ya tenía la suya."""
+    outcome = await service.create_purchase(user, payload)
+    response.status_code = outcome.status
+    return outcome.body
 
 
 @router.get("/purchases", response_model=list[PurchaseResponse])
-async def list_purchases(user: User = Depends(current_user), db: AsyncSession = Depends(get_db)):
-    items = await repo.purchases_of_user(db, user.id)
-    with_letter = await repo.letters_with_purchase(db, [item.id for item in items])
-    return [purchase_payload(item, item.id in with_letter) for item in items]
+async def list_purchases(
+    user: User = Depends(current_user),
+    service: CommerceService = Depends(commerce_service),
+):
+    return await service.list_purchases(user)
 
 
 @router.get("/purchases/{purchase_id}", response_model=PurchaseResponse)
 async def get_purchase(
     purchase_id: uuid.UUID,
     user: User = Depends(current_user),
-    db: AsyncSession = Depends(get_db),
+    service: CommerceService = Depends(commerce_service),
 ):
-    purchase = await repo.owned_purchase(db, purchase_id, user.id)
-    if purchase is None:
-        raise ApiError(404, "PURCHASE_NOT_FOUND", "La compra no existe para esta cuenta.")
-    letter = await repo.letter_of_purchase(db, purchase.id)
-    return purchase_payload(purchase, letter is not None)
+    return await service.get_purchase(user, purchase_id)
 
 
 @router.post(
@@ -192,91 +111,74 @@ async def get_purchase(
 async def verify_purchase(
     purchase_id: uuid.UUID,
     payload: PaymentVerifyInput,
-    request: Request,
     user: User = Depends(current_user),
-    db: AsyncSession = Depends(get_db),
+    service: CommerceService = Depends(commerce_service),
 ):
     """IOP #3: el navegador solo aporta el identificador; el estado lo confirma el servidor."""
-    purchase = await repo.owned_purchase(db, purchase_id, user.id)
-    if purchase is None:
-        raise ApiError(404, "PURCHASE_NOT_FOUND", "La compra no existe para esta cuenta.")
-    if payload.paymentId:
-        await purchases.verify(db, request.app.state.payments, purchase, payload.paymentId)
-    payment = await repo.payment_of_purchase(db, purchase.id)
-    letter = await repo.letter_of_purchase(db, purchase.id)
-    return PurchaseVerification(
-        purchase=purchase_payload(purchase, letter is not None),
-        payment=(
-            PaymentResponse(
-                status=payment.status,
-                statusDetail=payment.status_detail,
-                providerPaymentId=payment.provider_payment_id,
-                verifiedAt=payment.verified_at,
-            )
-            if payment
-            else None
-        ),
-        canCreateLetter=purchase.status == "paid" and letter is None,
-    )
+    return await service.verify_purchase(user, purchase_id, payload)
 
 
 @webhook_router.post("/mercadopago")
-async def mercadopago_webhook(request: Request, db: AsyncSession = Depends(get_db)):
+async def mercadopago_webhook(
+    request: Request, service: CommerceService = Depends(commerce_service)
+):
     """Sin CSRF (no viene de un navegador) pero con firma HMAC obligatoria."""
-    body = await request.body()
-    if len(body) > 64_000:
-        raise ApiError(413, "PAYLOAD_TOO_LARGE", "Notificación demasiado grande.")
-    gateway = request.app.state.payments
-    gateway.verify_webhook(body, {k.lower(): v for k, v in request.headers.items()})
-    try:
-        payload = await request.json()
-    except Exception:
-        raise ApiError(422, "INVALID_WEBHOOK", "Cuerpo de notificación inválido.") from None
-    if not isinstance(payload, dict):
-        raise ApiError(422, "INVALID_WEBHOOK", "Cuerpo de notificación inválido.")
-    result = await webhooks.handle(db, gateway, payload, request.query_params.get("data.id"))
+    result = await service.handle_webhook(
+        await request.body(),
+        {name.lower(): value for name, value in request.headers.items()},
+        request.query_params.get("data.id"),
+    )
     return {"result": result}
 
 
 # --- Cartas --------------------------------------------------------------------------
 
 
-@router.post("/letters", response_model=LetterResponse, dependencies=[Depends(csrf_guard)])
+@router.post(
+    "/letters",
+    response_model=LetterResponse | LetterQueued,
+    dependencies=[Depends(csrf_guard)],
+)
 async def create_letter(
     payload: LetterCreate,
-    request: Request,
     response: Response,
     user: User = Depends(current_user),
-    db: AsyncSession = Depends(get_db),
+    service: CommerceService = Depends(commerce_service),
 ):
-    """IOP #4..#6. Doble clic o varias pestañas devuelven la misma carta con 200."""
-    settings = settings_of(request)
-    letter, created = await letters.create(db, settings, user, payload)
-    response.status_code = 201 if created else 200
-    return await letter_payload(db, settings, letter)
+    """IOP #4 a #6: recibe la carta, corta el fraude y delega la escritura.
+
+    Con Azure Service Bus configurado el INSERT sale del camino de la petición: se
+    valida la compra en caliente (IOP #5: existe, es de esta cuenta, está pagada y no
+    tiene carta), se publica el mensaje con las fotos temporales y se responde **202**
+    sin escribir, para no atar la latencia del comprador a los 240 IOPS del disco. Un
+    segundo intento sobre la misma compra responde **409 LETTER_ALREADY_EXISTS**: quien
+    retrocede en el navegador no consigue una segunda carta.
+
+    Sin cola —o si la cola falla— se conserva el comportamiento síncrono de siempre:
+    201 con la carta creada y 200 con la existente, que es lo que espera el frontend
+    desplegado hoy.
+    """
+    outcome = await service.create_letter(user, payload)
+    response.status_code = outcome.status
+    return outcome.body
 
 
 @router.get("/letters", response_model=list[LetterResponse])
 async def my_letters(
-    request: Request, user: User = Depends(current_user), db: AsyncSession = Depends(get_db)
+    user: User = Depends(current_user),
+    service: CommerceService = Depends(commerce_service),
 ):
     """ "Mis cartas": estado de pago, entrega y borradores pendientes del comprador."""
-    settings = settings_of(request)
-    return [
-        await letter_payload(db, settings, letter)
-        for letter in await repo.letters_of_user(db, user.id)
-    ]
+    return await service.list_letters(user)
 
 
 @router.get("/letters/{letter_id}", response_model=LetterResponse)
 async def get_letter(
     letter_id: uuid.UUID,
-    request: Request,
     user: User = Depends(current_user),
-    db: AsyncSession = Depends(get_db),
+    service: CommerceService = Depends(commerce_service),
 ):
-    letter = await owned_letter(db, letter_id, user)
-    return await letter_payload(db, settings_of(request), letter)
+    return await service.get_letter(user, letter_id)
 
 
 @router.patch(
@@ -285,14 +187,10 @@ async def get_letter(
 async def update_letter(
     letter_id: uuid.UUID,
     payload: LetterUpdate,
-    request: Request,
     user: User = Depends(current_user),
-    db: AsyncSession = Depends(get_db),
+    service: CommerceService = Depends(commerce_service),
 ):
-    settings = settings_of(request)
-    letter = await owned_letter(db, letter_id, user)
-    await letters.update(db, settings, letter, payload)
-    return await letter_payload(db, settings, letter)
+    return await service.update_letter(user, letter_id, payload)
 
 
 @router.post(
@@ -302,16 +200,11 @@ async def update_letter(
 )
 async def publish_letter(
     letter_id: uuid.UUID,
-    request: Request,
     user: User = Depends(current_user),
-    db: AsyncSession = Depends(get_db),
+    service: CommerceService = Depends(commerce_service),
 ):
     """IOP #7: publica, genera enlace/QR y envía el correo con estado persistido."""
-    settings = settings_of(request)
-    letter = await owned_letter(db, letter_id, user)
-    await letters.publish(db, settings, letter)
-    await deliveries.deliver(db, settings, request.app.state.mailer, letter)
-    return await letter_payload(db, settings, letter)
+    return await service.publish_letter(user, letter_id)
 
 
 @router.post(
@@ -323,28 +216,45 @@ async def publish_letter(
 async def resend_letter(
     letter_id: uuid.UUID,
     payload: ResendInput,
-    request: Request,
     user: User = Depends(current_user),
-    db: AsyncSession = Depends(get_db),
+    service: CommerceService = Depends(commerce_service),
 ):
     """Reenviar no consume otra compra ni crea otra carta: solo otro intento de envío."""
-    settings = settings_of(request)
-    letter = await owned_letter(db, letter_id, user)
-    recipient = str(payload.recipientEmail) if payload.recipientEmail else None
-    delivery = await deliveries.deliver(db, settings, request.app.state.mailer, letter, recipient)
-    return DeliveryResponse(
-        id=delivery.id,
-        recipientEmail=delivery.recipient_email,
-        status=delivery.status,
-        attempts=delivery.attempts,
-        letterVersion=delivery.letter_version,
-        lastError=delivery.last_error,
-        sentAt=delivery.sent_at,
-        createdAt=delivery.created_at,
-    )
+    return await service.resend_letter(user, letter_id, payload)
 
 
 # --- Fotos ---------------------------------------------------------------------------
+
+
+@router.post(
+    "/letters/photos/eager",
+    response_model=EagerPhotoResponse,
+    status_code=201,
+    dependencies=[Depends(csrf_guard)],
+)
+async def eager_photo(
+    request: Request,
+    file: UploadFile = File(...),
+    user: User = Depends(current_user),
+    service: CommerceService = Depends(commerce_service),
+):
+    """Sube una foto en caliente, antes de que exista la carta (eager upload).
+
+    Va al contenedor efímero (``AZURE_TEMPORAL_CONTAINER_NAME``, o una carpeta local en
+    desarrollo) y no toca PostgreSQL: mientras el comprador elige fotos no se gasta ni
+    una escritura. El ``tempId`` devuelto es lo que se adjunta luego en ``temp_photos``
+    al crear la carta; el worker lo traslada al contenedor permanente.
+
+    La ruta va antes de ``/letters/{letter_id}/photos`` a propósito: si se declarara
+    después, ``photos`` se interpretaría como un ``letter_id`` y nunca se alcanzaría.
+
+    Se lee un byte más del máximo permitido para poder distinguir "justo en el límite"
+    de "se pasó", sin cargar en memoria un archivo entero que se va a rechazar.
+    """
+    limit = request.app.state.settings.max_photo_bytes
+    return await service.eager_photo(
+        user, await file.read(limit + 1), file.content_type, file.filename
+    )
 
 
 @router.post(
@@ -360,28 +270,11 @@ async def upload_photo(
     caption: str | None = Form(default=None, max_length=200),
     position: int | None = Form(default=None, ge=0, le=99),
     user: User = Depends(current_user),
-    db: AsyncSession = Depends(get_db),
+    service: CommerceService = Depends(commerce_service),
 ):
-    settings = settings_of(request)
-    letter = await owned_letter(db, letter_id, user)
-    data = await file.read(settings.max_photo_bytes + 1)
-    photo = await letters.add_photo(
-        db,
-        settings,
-        request.app.state.storage,
-        letter,
-        data,
-        file.content_type,
-        caption,
-        position,
-    )
-    return PhotoResponse(
-        id=photo.id,
-        position=photo.position,
-        caption=photo.caption,
-        contentType=photo.content_type,
-        byteSize=photo.byte_size,
-        url=f"/api/v1/letters/{letter.id}/photos/{photo.id}/content",
+    limit = request.app.state.settings.max_photo_bytes
+    return await service.add_photo(
+        user, letter_id, await file.read(limit + 1), file.content_type, caption, position
     )
 
 
@@ -389,115 +282,53 @@ async def upload_photo(
 async def photo_content(
     letter_id: uuid.UUID,
     photo_id: uuid.UUID,
-    request: Request,
     user: User = Depends(current_user),
-    db: AsyncSession = Depends(get_db),
+    service: CommerceService = Depends(commerce_service),
 ):
-    letter = await owned_letter(db, letter_id, user)
-    photo = await repo.photo_of_letter(db, letter.id, photo_id)
-    if photo is None:
-        raise ApiError(404, "PHOTO_NOT_FOUND", "La foto no existe.")
-    data = await request.app.state.storage.get(photo.storage_key)
-    return Response(content=data, media_type=photo.content_type)
+    return binary(await service.photo_content(user, letter_id, photo_id))
 
 
 @router.delete("/letters/{letter_id}/photos/{photo_id}", dependencies=[Depends(csrf_guard)])
 async def delete_photo(
     letter_id: uuid.UUID,
     photo_id: uuid.UUID,
-    request: Request,
     user: User = Depends(current_user),
-    db: AsyncSession = Depends(get_db),
+    service: CommerceService = Depends(commerce_service),
 ):
-    settings = settings_of(request)
-    letter = await owned_letter(db, letter_id, user)
-    photo = await repo.photo_of_letter(db, letter.id, photo_id)
-    if photo is None:
-        raise ApiError(404, "PHOTO_NOT_FOUND", "La foto no existe.")
-    await letters.remove_photo(db, settings, request.app.state.storage, letter, photo)
+    await service.delete_photo(user, letter_id, photo_id)
     return {"message": "Foto eliminada."}
 
 
 @router.get("/letters/{letter_id}/qr.png")
 async def letter_qr(
     letter_id: uuid.UUID,
-    request: Request,
     user: User = Depends(current_user),
-    db: AsyncSession = Depends(get_db),
+    service: CommerceService = Depends(commerce_service),
 ):
-    from app.services.qr import qr_png  # noqa: PLC0415 - importación local, uso puntual
-
-    settings = settings_of(request)
-    letter = await owned_letter(db, letter_id, user)
-    url = letters.public_url(settings, letter)
-    if not url:
-        raise ApiError(409, "LETTER_NOT_PUBLISHED", "Publica la carta para obtener su QR.")
-    return Response(content=qr_png(url), media_type="image/png")
+    return binary(await service.letter_qr(user, letter_id))
 
 
 # --- Visor público (sin sesión, sin datos personales del comprador) ------------------
 
 
-async def published_letter(db: AsyncSession, slug: str) -> Letter:
-    letter = await repo.letter_by_slug(db, slug)
-    if letter is None or letter.status != "published":
-        raise ApiError(404, "LETTER_NOT_FOUND", "La carta no está disponible.")
-    return letter
-
-
 @public_router.get("/letters/{slug}", response_model=PublicLetterResponse)
-async def public_letter(slug: str, db: AsyncSession = Depends(get_db)):
-    letter = await published_letter(db, slug)
-    photos = await repo.photos_of_letter(db, letter.id)
-    return PublicLetterResponse(
-        letterId=letter.id,
-        publishedVersion=letter.published_version,
-        title=letter.title,
-        recipientName=letter.recipient_name,
-        body=letter.body,
-        theme=letter.theme,
-        photos=[
-            PublicPhoto(
-                position=photo.position,
-                caption=photo.caption,
-                url=f"/api/v1/public/letters/{slug}/photos/{photo.position}",
-            )
-            for photo in photos
-        ],
-        publishedAt=letter.published_at,
-    )
+async def public_letter(slug: str, service: CommerceService = Depends(commerce_service)):
+    return await service.public_letter(slug)
 
 
 @public_router.get("/letters/{slug}/photos/{position}")
 async def public_photo(
-    slug: str, position: int, request: Request, db: AsyncSession = Depends(get_db)
+    slug: str, position: int, service: CommerceService = Depends(commerce_service)
 ):
-    letter = await published_letter(db, slug)
-    photo = await repo.photo_at_position(db, letter.id, position)
-    if photo is None:
-        raise ApiError(404, "PHOTO_NOT_FOUND", "La foto no existe.")
-    data = await request.app.state.storage.get(photo.storage_key)
-    return Response(content=data, media_type=photo.content_type)
+    return binary(await service.public_photo(slug, position))
 
 
 @public_router.get("/letters/{slug}/qr.png")
-async def public_qr(slug: str, request: Request, db: AsyncSession = Depends(get_db)):
-    from app.services.qr import qr_png  # noqa: PLC0415 - importación local, uso puntual
-
-    settings = settings_of(request)
-    letter = await published_letter(db, slug)
-    return Response(content=qr_png(letters.public_url(settings, letter)), media_type="image/png")
+async def public_qr(slug: str, service: CommerceService = Depends(commerce_service)):
+    return binary(await service.public_qr(slug))
 
 
-@router.get("/health/commerce", include_in_schema=False)
-async def commerce_health(request: Request):
+@router.get("/health/commerce", response_model=CommerceHealth, include_in_schema=False)
+async def commerce_health(service: CommerceService = Depends(commerce_service)):
     """Diagnóstico sin secretos: qué integraciones están configuradas."""
-    settings = settings_of(request)
-    return JSONResponse(
-        {
-            "paymentProvider": settings.payment_provider,
-            "storageBackend": settings.storage_backend,
-            "mailBackend": settings.mail_backend,
-            "freezeAfterPublish": settings.freeze_letter_after_publish,
-        }
-    )
+    return service.health()
