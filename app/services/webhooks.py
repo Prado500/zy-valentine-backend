@@ -7,6 +7,8 @@
   retrocede de rango, de modo que un webhook viejo no "despaga" una compra.
 """
 
+import json
+
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -17,6 +19,21 @@ from app.services import purchases
 from app.services.payments import PaymentGateway
 
 PROVIDER = "mercadopago"
+
+
+def decode(body: bytes) -> dict:
+    """Interpreta el cuerpo del webhook. Debe llamarse **después** de validar la firma.
+
+    Un cuerpo que no sea un objeto JSON se rechaza aquí y no llega a la base: lo que
+    manda un tercero por la red es una entrada, no un dato de confianza.
+    """
+    try:
+        payload = json.loads(body)
+    except (ValueError, UnicodeDecodeError):
+        raise ApiError(422, "INVALID_WEBHOOK", "Cuerpo de notificación inválido.") from None
+    if not isinstance(payload, dict):
+        raise ApiError(422, "INVALID_WEBHOOK", "Cuerpo de notificación inválido.")
+    return payload
 
 
 def extract_event(payload: dict, query_id: str | None) -> tuple[str, str | None, str | None]:

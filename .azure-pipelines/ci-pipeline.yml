@@ -1,3 +1,18 @@
+# Compuerta de calidad de los pull requests.
+#
+# Cambios respecto a la versión anterior, y por qué:
+#
+# 1. **PostgreSQL como contenedor de servicio.** La suite se salta todas las pruebas
+#    de integración cuando no hay `TEST_DATABASE_URL` (ver `tests/conftest.py`), así
+#    que el pipeline daba verde ejecutando menos de la mitad: 105 de 268 pruebas se
+#    omitían en silencio. `DATABASE_URL: sqlite+aiosqlite:///:memory:` no servía de
+#    nada —el conftest la sobrescribe, y el código usa JSONB y ON CONFLICT, que
+#    SQLite no tiene—.
+# 2. **`ruff check`** como paso propio. Estaba en las dependencias de prueba pero no
+#    se ejecutaba: un PR podía romper el formato acordado sin que nadie se enterara.
+# 3. **Extra `azure`.** Es lo que instala el Dockerfile, así que es lo que se
+#    despliega; sin él, las pruebas del almacenamiento y de la cola se omitían.
+
 trigger: none
 
 pr:
@@ -15,27 +30,89 @@ variables:
     value: '3.11'
   - group: VG-ZV-DEV
 
-steps:
-  - task: UsePythonVersion@0
-    displayName: 'Configurar versión de Python'
-    inputs:
-      versionSpec: '$(pythonVersion)'
+resources:
+  containers:
+    - container: postgres
+      image: postgres:15-alpine
+      ports:
+        - 5432:5432
+      env:
+        POSTGRES_USER: postgres
+        POSTGRES_PASSWORD: local
+        # El nombre lo exige `tests/conftest.py`: la suite ejecuta TRUNCATE y se
+        # niega a apuntar a una base que no sea desechable.
+        POSTGRES_DB: zy_auth_validation
 
-  - script: |
-      pip install -e .[test]
-    displayName: 'Instalar dependencias (pyproject.toml)'
+jobs:
+  - job: QualityGate
+    displayName: 'Compuerta de Calidad'
+    services:
+      postgres: postgres
+    variables:
+      # Base desechable en loopback: solo existe mientras dura este job.
+      TEST_DB_URL: 'postgresql+asyncpg://postgres:local@127.0.0.1:5432/zy_auth_validation'
+    steps:
+      - task: UsePythonVersion@0
+        displayName: 'Configurar versión de Python'
+        inputs:
+          versionSpec: '$(pythonVersion)'
 
-  - script: |
-      pytest -v
-    displayName: 'Compuerta de Calidad: Ejecutar Pruebas Unitarias (Pytest)'
-    env:
-      DATABASE_URL: "sqlite+aiosqlite:///:memory:"
-      JWT_SECRET_KEY: "super_secreto_ficticio_para_el_ci_pipeline"
-      MAIL_USERNAME: $(MAIL_USERNAME)
-      MAIL_PASSWORD: $(MAIL_PASSWORD)
-      ACCESS_TOKEN_EXPIRE_MINUTES: "30"
-      ALGORITHM: "HS256"
-      AZURE_CONTAINER_NAME: "dummy-container"
-      AZURE_TEMPORAL_CONTAINER_NAME: "dummy-temp"
-      AZURE_STORAGE_CONNECTION_STRING: "DefaultEndpointsProtocol=https;AccountName=dummy;AccountKey=dummy;"
-      FRONTEND_URL: "http://localhost:3000"
+      - script: pip install -e ".[test,azure]"
+        displayName: 'Instalar dependencias (pyproject.toml)'
+
+      - script: ruff check .
+        displayName: 'Compuerta de Calidad: Estilo y errores (Ruff)'
+
+      - script: |
+          python - <<'PY'
+          import asyncio, sys, time
+          import asyncpg
+
+          async def wait() -> int:
+              deadline = time.monotonic() + 60
+              while time.monotonic() < deadline:
+                  try:
+                      connection = await asyncpg.connect(
+                          user="postgres", password="local", database="zy_auth_validation",
+                          host="127.0.0.1", port=5432,
+                      )
+                  except Exception as error:
+                      print(f"esperando a PostgreSQL ({type(error).__name__})")
+                      await asyncio.sleep(2)
+                  else:
+                      await connection.close()
+                      print("PostgreSQL listo")
+                      return 0
+              print("PostgreSQL no respondió en 60 s", file=sys.stderr)
+              return 1
+
+          sys.exit(asyncio.run(wait()))
+          PY
+        displayName: 'Esperar a PostgreSQL'
+
+      - script: python -m alembic upgrade head
+        displayName: 'Aplicar migraciones en la base de pruebas'
+        env:
+          DATABASE_URL: $(TEST_DB_URL)
+          APP_ENV: local
+          DB_SSL_MODE: disable
+
+      - script: pytest -v
+        displayName: 'Compuerta de Calidad: Ejecutar Pruebas (Pytest)'
+        env:
+          # Con esta variable la suite deja de omitir las pruebas de integración.
+          TEST_DATABASE_URL: $(TEST_DB_URL)
+          DATABASE_URL: $(TEST_DB_URL)
+          APP_ENV: local
+          DB_SSL_MODE: disable
+          MAIL_USERNAME: $(MAIL_USERNAME)
+          MAIL_PASSWORD: $(MAIL_PASSWORD)
+          AZURE_CONTAINER_NAME: "dummy-container"
+          AZURE_TEMPORAL_CONTAINER_NAME: "dummy-temp"
+          AZURE_STORAGE_CONNECTION_STRING: "DefaultEndpointsProtocol=https;AccountName=dummy;AccountKey=dummy;"
+          FRONTEND_URL: "http://localhost:3000"
+          # Variables heredadas que esta API no usa; se mantienen para no romper el
+          # grupo de variables compartido con el proyecto de referencia.
+          JWT_SECRET_KEY: "super_secreto_ficticio_para_el_ci_pipeline"
+          ACCESS_TOKEN_EXPIRE_MINUTES: "30"
+          ALGORITHM: "HS256"

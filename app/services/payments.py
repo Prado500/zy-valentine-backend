@@ -7,6 +7,7 @@ terminan en la misma verificación de servidor.
 
 import hashlib
 import hmac
+import logging
 from dataclasses import dataclass
 
 import httpx
@@ -14,6 +15,8 @@ import httpx
 from app.core.config import Settings
 from app.core.errors import ApiError
 from app.models.commerce import PAYMENT_STATUSES
+
+LOG = logging.getLogger("app.payments")
 
 
 @dataclass(frozen=True)
@@ -162,7 +165,64 @@ def normalize_payment(payload: dict) -> PaymentSnapshot:
     )
 
 
+class LabGateway(PaymentGateway):
+    """Proveedor de laboratorio: aprueba cualquier pago **sin cobrar nada**.
+
+    Existe para poder recorrer el flujo comercial completo en un portátil, sin
+    credenciales de Mercado Pago: el frontend manda un ``paymentId`` cualquiera y
+    la compra queda pagada. Es, literalmente, una puerta abierta.
+
+    Por eso está acotado por dos candados independientes:
+
+    - ``Settings.validate_runtime`` rechaza el arranque si ``PAYMENT_PROVIDER=fake``
+      con ``APP_ENV`` distinto de ``local``.
+    - :func:`build_gateway` vuelve a comprobarlo antes de instanciarlo, para que un
+      cambio futuro en la configuración no lo cuele en un entorno remoto.
+
+    El importe declarado es exactamente el de la compra, así que la verificación de
+    monto de ``purchases.apply_snapshot`` sigue ejecutándose de verdad en vez de
+    saltarse; y no se declara ``external_reference``, para que el pago simulado se
+    aplique a la compra que se está verificando.
+    """
+
+    configured = True
+
+    def __init__(self, settings: Settings):
+        self.settings = settings
+
+    async def fetch_payment(self, payment_id: str) -> PaymentSnapshot:
+        if not payment_id.isdigit() or len(payment_id) > 32:
+            raise ApiError(422, "INVALID_PAYMENT_ID", "Identificador de pago inválido.")
+        return PaymentSnapshot(
+            provider_payment_id=payment_id,
+            status="approved",
+            status_detail="accredited",
+            amount_cents=self.settings.purchase_amount_cents,
+            currency=self.settings.purchase_currency,
+            external_reference=None,
+        )
+
+    async def create_preference(
+        self, reference: str, amount_cents: int, currency: str, return_url: str
+    ) -> tuple[str | None, str | None]:
+        # Sin checkout externo: el frontend se queda en su botón de simulación.
+        return f"lab-{reference}", None
+
+    def verify_webhook(self, body: bytes, headers: dict[str, str]) -> None:
+        """Acepta el webhook sin firma. Solo alcanzable con APP_ENV=local."""
+        LOG.warning("Webhook aceptado sin firma: proveedor de laboratorio (APP_ENV=local)")
+
+
 def build_gateway(settings: Settings) -> PaymentGateway:
     if settings.payment_provider == "mercadopago":
         return MercadoPagoGateway(settings)
+    if settings.payment_provider == "fake":
+        # Defensa en profundidad: el validador de Settings ya lo impide, pero este
+        # objeto aprueba pagos y no puede depender de una sola comprobación.
+        if settings.app_env != "local":
+            raise RuntimeError("PAYMENT_PROVIDER=fake solo se admite con APP_ENV=local")
+        LOG.warning(
+            "Proveedor de pagos de LABORATORIO activo: cualquier pago se aprueba sin cobrar"
+        )
+        return LabGateway(settings)
     return UnconfiguredGateway()

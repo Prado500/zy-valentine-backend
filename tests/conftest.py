@@ -178,6 +178,25 @@ class FakeGateway(PaymentGateway):
             raise ApiError(401, "WEBHOOK_SIGNATURE_INVALID", "Firma de webhook inválida.")
 
 
+def service_for(app, db):
+    """`CommerceService` armado con los puertos de la aplicación de pruebas.
+
+    Es exactamente lo que construye `app/api/dependencies.py` en cada petición y lo
+    que arma el worker por mensaje, así que una prueba que lo use ejercita la misma
+    orquestación que corre en producción.
+    """
+    from app.services.commerce import CommerceService  # noqa: PLC0415
+
+    return CommerceService(
+        db=db,
+        settings=app.state.settings,
+        storage=app.state.storage,
+        mailer=app.state.mailer,
+        payments=app.state.payments,
+        queue=app.state.letter_queue,
+    )
+
+
 @pytest.fixture
 def gateway(app):
     fake = FakeGateway()
