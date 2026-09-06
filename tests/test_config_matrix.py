@@ -9,7 +9,14 @@ eleva a verificación completa y que nunca degrada TLS fuera de local.
 import pytest
 from pydantic import ValidationError
 
-from app.core.config import LEGACY_UNUSED_VARIABLES, MigrationSettings, Settings
+from app.core.config import (
+    LEGACY_UNUSED_VARIABLES,
+    ConfigurationError,
+    MigrationSettings,
+    Settings,
+    get_migration_settings,
+    get_settings,
+)
 from app.core.dsn import DsnError, split_ssl_query
 
 BASE = "postgresql+asyncpg://user:pass@srv.postgres.database.azure.com:5432/db_zv_develop"
@@ -209,3 +216,138 @@ def test_migrations_never_degrade_tls_outside_local(changes):
     payload = {"database_url": f"{BASE}?ssl=require", "app_env": "develop", **changes}
     with pytest.raises(ValidationError):
         MigrationSettings(_env_file=None, **payload)
+
+
+# --- Diagnóstico de arranque (fallo real del App Service) ------------------------------
+
+
+REMOTE_ENV = {
+    "APP_ENV": "develop",
+    "SESSION_SECRET": "0" * 40,
+    "DATABASE_URL": f"{BASE}?sslmode=require",
+    "FRONTEND_URL": "https://front.example.com",
+    "CORS_ORIGINS": '["https://front.example.com"]',
+    "STORAGE_BACKEND": "azure",
+    "AZURE_STORAGE_CONNECTION_STRING": "UseDevelopmentStorage=true",
+    "AZURE_CONTAINER_NAME": "cartas",
+}
+
+
+def load_settings(tmp_path, monkeypatch, **environment):
+    """Construye Settings como lo haría un contenedor recién arrancado.
+
+    Sin `.env` y sin heredar nada del proceso de pruebas: se parte de cero y solo
+    existen las variables que declara el escenario.
+    """
+    monkeypatch.chdir(tmp_path)
+    for field in Settings.model_fields:
+        monkeypatch.delenv(field.upper(), raising=False)
+    for name, value in environment.items():
+        monkeypatch.setenv(name, value)
+    get_settings.cache_clear()
+    try:
+        return get_settings()
+    finally:
+        get_settings.cache_clear()
+
+
+def test_missing_session_secret_explains_what_to_do(tmp_path, monkeypatch):
+    """El App Service arrancó sin SESSION_SECRET y solo mostró una traza de pydantic."""
+    with pytest.raises(ConfigurationError) as error:
+        load_settings(
+            tmp_path,
+            monkeypatch,
+            APP_ENV="develop",
+            DATABASE_URL=f"{BASE}?sslmode=require",
+            JWT_SECRET_KEY="heredada-del-proyecto-de-referencia",
+        )
+    message = str(error.value)
+    assert "SESSION_SECRET" in message
+    assert "JWT_SECRET_KEY no lo sustituye" in message
+    assert "MATRIZ_CONFIGURACION.md" in message
+
+
+def test_app_service_requires_an_explicit_app_env(tmp_path, monkeypatch):
+    """Sin APP_ENV, un despliegue real arrancaría como 'local': cookies sin Secure."""
+    with pytest.raises(ConfigurationError) as error:
+        load_settings(
+            tmp_path,
+            monkeypatch,
+            WEBSITE_SITE_NAME="api-zv-dev",
+            SESSION_SECRET="0" * 40,
+            DATABASE_URL=f"{BASE}?sslmode=require",
+        )
+    assert "APP_ENV" in str(error.value)
+
+
+def test_app_service_boots_with_the_full_configuration(tmp_path, monkeypatch):
+    config = load_settings(tmp_path, monkeypatch, WEBSITE_SITE_NAME="api-zv-dev", **REMOTE_ENV)
+    assert config.session_cookie.startswith("__Host-")
+    assert config.db_ssl_mode == "verify-full"
+    assert config.storage_backend == "azure"
+
+
+def test_startup_error_never_leaks_the_secret_value(tmp_path, monkeypatch):
+    with pytest.raises(ConfigurationError) as error:
+        load_settings(
+            tmp_path,
+            monkeypatch,
+            APP_ENV="develop",
+            SESSION_SECRET="secreto-demasiado-corto",
+            DATABASE_URL=f"{BASE}?sslmode=require",
+        )
+    assert "secreto-demasiado-corto" not in str(error.value)
+
+
+@pytest.mark.parametrize(
+    ("broken", "expected"),
+    [
+        ({"CORS_ORIGINS": '["http://localhost:5173"]'}, "CORS_ORIGINS"),
+        ({"FRONTEND_URL": "http://front.example.com"}, "FRONTEND_URL"),
+        ({"STORAGE_BACKEND": "local"}, "STORAGE_BACKEND"),
+        ({"WEB_CONCURRENCY": "10"}, "WEB_CONCURRENCY"),
+        ({"DATABASE_URL": f"{BASE}?sslmode=disable"}, "sslmode=disable"),
+    ],
+)
+def test_each_failure_names_the_variable_to_fix(tmp_path, monkeypatch, broken, expected):
+    """Un fallo de arranque debe decir qué variable arreglar, no solo que algo falla."""
+    with pytest.raises(ConfigurationError) as error:
+        load_settings(tmp_path, monkeypatch, **{**REMOTE_ENV, **broken})
+    assert expected in str(error.value)
+
+
+def test_migration_configuration_errors_are_also_readable(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    get_migration_settings.cache_clear()
+    try:
+        with pytest.raises(ConfigurationError) as error:
+            get_migration_settings()
+    finally:
+        get_migration_settings.cache_clear()
+    assert "DATABASE_URL" in str(error.value)
+    assert "migraciones" in str(error.value)
+
+
+def test_azure_storage_backend_is_installable_in_the_image(settings):
+    """El artefacto de despliegue debe traer el SDK de Azure.
+
+    Todo entorno remoto exige STORAGE_BACKEND=azure, así que si el extra `[azure]`
+    desaparece del Dockerfile el contenedor arranca y muere en el lifespan. Aquí se
+    comprueba que el backend se construye cuando el SDK está presente.
+    """
+    pytest.importorskip("azure.storage.blob", reason="extra opcional [azure] no instalado")
+    from app.services.storage import AzureBlobStorage, build_storage  # noqa: PLC0415
+
+    config = build(
+        settings,
+        **{
+            **REMOTE,
+            "azure_storage_connection_string": (
+                "DefaultEndpointsProtocol=https;AccountName=x;AccountKey=eHl6;"
+                "EndpointSuffix=core.windows.net"
+            ),
+        },
+        database_url=f"{BASE}?ssl=require",
+    )
+    assert isinstance(build_storage(config), AzureBlobStorage)

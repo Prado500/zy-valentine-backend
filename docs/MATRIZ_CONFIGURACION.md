@@ -171,3 +171,67 @@ Recomendación menor: añadir `-e APP_ENV=develop` (o `staging`/`production`) al
 `docker run`. Sin esa variable, `APP_ENV` cae a `local` y la migración aceptaría una URL
 sin TLS si alguien la configurara así. Con las cadenas actuales, que llevan `require`, el
 TLS se verifica de todos modos.
+
+
+## 8. Variables del App Service: qué falta respecto al proyecto de referencia
+
+**Incidente del 2026-09-06.** El despliegue a DEV construyó y migró bien, pero el
+contenedor no arrancó:
+
+```
+pydantic_core._pydantic_core.ValidationError: 1 validation error for Settings
+session_secret
+  Field required [type=missing]
+```
+
+Causa: el App Service tiene la lista de variables **del proyecto de referencia**, que
+autenticaba con JWT. Esa lista incluye `JWT_SECRET_KEY`, `ALGORITHM` y
+`ACCESS_TOKEN_EXPIRE_MINUTES`, pero **no incluye `SESSION_SECRET`**, que es lo que esta
+API necesita para firmar y validar sesiones. No es un fallo del código ni del pipeline:
+falta configuración en el App Service.
+
+Desde este corte, el arranque falla con un diagnóstico legible que nombra la variable y
+explica cómo generarla, en vez de una traza de pydantic.
+
+### Variables a añadir en cada App Service
+
+| Variable | DEV | STG | MAIN |
+|---|---|---|---|
+| `APP_ENV` | `develop` | `staging` | `production` |
+| `SESSION_SECRET` | secreto propio ≥32 caracteres | ídem, distinto | ídem, distinto |
+| `CORS_ORIGINS` | `["https://<front-dev>"]` | `["https://<front-stg>"]` | `["https://<front-main>"]` |
+| `FRONTEND_URL` | `https://<front-dev>` | `https://<front-stg>` | `https://<front-main>` |
+| `STORAGE_BACKEND` | `azure` | `azure` | `azure` |
+| `AZURE_STORAGE_CONNECTION_STRING` | secreto | secreto | secreto |
+| `AZURE_CONTAINER_NAME` | contenedor de fotos | ídem | ídem |
+| `WEB_CONCURRENCY` / `APP_REPLICAS` | valores reales del plan | ídem | ídem |
+
+Opcionales según se activen: `MAIL_BACKEND=smtp` con `MAIL_USERNAME`/`MAIL_PASSWORD`,
+`PAYMENT_PROVIDER=mercadopago` con `MERCADOPAGO_ACCESS_TOKEN` y
+`MERCADOPAGO_WEBHOOK_SECRET`, `PURCHASE_AMOUNT_CENTS`, `GOOGLE_CLIENT_ID` y
+`PII_HMAC_KEY`. Cada una exige sus propios secretos: si se activa a medias, el arranque
+falla diciendo cuál falta.
+
+Genera cada `SESSION_SECRET` sin imprimirlo en un chat ni en un ticket:
+
+```bash
+python -c "import secrets; print(secrets.token_urlsafe(48))"
+```
+
+Debe ser **idéntico en todas las réplicas del mismo entorno** y **distinto entre
+entornos**. Rotarlo invalida las sesiones y los tokens CSRF en vuelo.
+
+### Variables que sobran
+
+`JWT_SECRET_KEY`, `ALGORITHM` y `ACCESS_TOKEN_EXPIRE_MINUTES` pueden eliminarse: esta
+API no las lee y no sustituyen a `SESSION_SECRET`. Dejarlas no rompe nada, pero induce a
+pensar que existe un flujo JWT que no existe.
+
+### Por qué `APP_ENV` es obligatorio ahora
+
+Si `APP_ENV` no está definido, la configuración caería a `local`, y eso en un despliegue
+real significa cookies **sin** `Secure` ni prefijo `__Host-`, sin exigir TLS verificado y
+sin exigir almacenamiento durable. Como Azure App Service siempre define
+`WEBSITE_SITE_NAME`, la aplicación detecta que está en un despliegue real y **se niega a
+arrancar** si `APP_ENV` no se declaró de forma explícita. Es preferible un arranque
+fallido y ruidoso a un servicio en producción con cookies inseguras.

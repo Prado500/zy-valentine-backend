@@ -5,7 +5,9 @@ COPY pyproject.toml requirements.lock README.md ./
 COPY app ./app
 COPY alembic ./alembic
 COPY alembic.ini ./
-RUN pip install --no-cache-dir -c requirements.lock . \
+# El extra azure se instala siempre: develop/staging/production exigen
+# STORAGE_BACKEND=azure, así que el SDK forma parte del artefacto de despliegue.
+RUN pip install --no-cache-dir -c requirements.lock ".[azure]" \
     && useradd --create-home --uid 10001 appuser
 USER appuser
 EXPOSE 8000
