@@ -168,10 +168,12 @@ async def test_webhook_for_unknown_purchase_is_reported(client, gateway, buyer):
 async def test_paid_purchase_creates_exactly_one_letter(client, paid_purchase, app):
     created = await create_letter(client, paid_purchase)
     assert created.status_code == 201
+    # Volver a enviar el formulario sobre un borrador lo retoma: misma carta (mismo id,
+    # una sola fila) con el contenido nuevo. El detalle está en tests/test_retake_draft.py.
     again = await create_letter(client, paid_purchase, title="Intento nuevo")
     assert again.status_code == 200
     assert again.json()["id"] == created.json()["id"]
-    assert again.json()["title"] == LETTER["title"]
+    assert again.json()["title"] == "Intento nuevo"
     async with app.state.sessions() as db:
         assert await db.scalar(select(func.count()).select_from(Letter)) == 1
 

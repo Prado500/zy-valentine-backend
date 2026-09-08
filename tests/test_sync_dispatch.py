@@ -92,7 +92,7 @@ class Ledger:
             self.calls.append("create")
             return self.letter, self.created
 
-        async def attach(db, settings, storage, letter, refs):
+        async def attach(db, settings, storage, letter, refs, *, replace=False):
             self.calls.append("attach")
             return []
 
@@ -228,7 +228,8 @@ async def test_existing_published_letter_is_not_emailed_again(settings, monkeypa
 
 
 async def test_existing_draft_is_completed_on_retry(settings, monkeypatch):
-    # Un intento anterior murió entre crear y despachar: el reintento lo termina.
+    # Un intento anterior murió entre crear y despachar: el reintento lo termina. Al ser
+    # un borrador, las fotos vuelven a adjuntarse (las del payload de ahora) y se publica.
     letter = draft_letter()
     ledger = Ledger(letter, created=False).install(monkeypatch)
     payload = LetterCreate(purchaseId=letter.purchase_id, **LETTER)
@@ -236,7 +237,7 @@ async def test_existing_draft_is_completed_on_retry(settings, monkeypatch):
     outcome = await sync_service(settings).create_letter(buyer_user(), payload)
 
     assert outcome.status == 200
-    assert ledger.calls == ["create", "publish", "deliver"]
+    assert ledger.calls == ["create", "attach", "publish", "deliver"]
     assert outcome.body.status == "published"
 
 

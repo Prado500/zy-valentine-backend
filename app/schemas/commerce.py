@@ -1,5 +1,6 @@
 import uuid
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
@@ -76,7 +77,12 @@ class LetterInput(Input):
 
     @field_validator("title", "recipientName")
     @classmethod
-    def nonblank(cls, value: str) -> str:
+    def nonblank(cls, value: str | None) -> str | None:
+        # `LetterUpdate` hereda este validador con campos opcionales: un `null` explícito
+        # significa "no tocar", igual que omitir el campo, y no debe llegar a `.replace`
+        # (antes reventaba con AttributeError y la petición acababa en un 500).
+        if value is None:
+            return None
         value = _clean_text(value).strip()
         if not value:
             raise ValueError("Field cannot be blank")
@@ -84,7 +90,9 @@ class LetterInput(Input):
 
     @field_validator("body")
     @classmethod
-    def clean_body(cls, value: str) -> str:
+    def clean_body(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
         value = _clean_text(value)
         if not value.strip():
             raise ValueError("Body cannot be blank")
@@ -204,6 +212,29 @@ class LetterResponse(BaseModel):
     photos: list[PhotoResponse]
     deliveries: list[DeliveryResponse]
     createdAt: datetime
+    updatedAt: datetime
+
+
+class DedicationResponse(BaseModel):
+    """Una fila del panel "Mis dedicatorias".
+
+    Ligera a propósito: sin cuerpo, fotos ni entregas, que siguen en ``GET /letters/{id}``.
+    ``state`` se deriva al leer (ver ``app.services.dedications``): ``draft`` es una compra
+    pagada sin carta o una carta en borrador; ``published``, una carta ya publicada. Con
+    ``letterId`` nulo el frontend abre el editor con ``purchaseId``; si hay carta en
+    borrador, el mismo ``POST /letters`` la retoma desde cero.
+    """
+
+    purchaseId: uuid.UUID
+    letterId: uuid.UUID | None
+    state: Literal["draft", "published"]
+    title: str | None
+    recipientName: str | None
+    theme: str | None
+    publicSlug: str | None
+    publicUrl: str | None
+    paidAt: datetime | None
+    publishedAt: datetime | None
     updatedAt: datetime
 
 

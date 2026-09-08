@@ -18,6 +18,7 @@ from app.api.dependencies import commerce_service, csrf_guard, current_user
 from app.models.user import User
 from app.schemas.commerce import (
     CommerceHealth,
+    DedicationResponse,
     DeliveryResponse,
     EagerPhotoResponse,
     IdentityDocumentInput,
@@ -149,14 +150,17 @@ async def create_letter(
 
     Con Azure Service Bus configurado el INSERT sale del camino de la petición: se
     valida la compra en caliente (IOP #5: existe, es de esta cuenta, está pagada y no
-    tiene carta), se publica el mensaje con las fotos temporales y se responde **202**
-    sin escribir, para no atar la latencia del comprador a los 240 IOPS del disco. Un
-    segundo intento sobre la misma compra responde **409 LETTER_ALREADY_EXISTS**: quien
-    retrocede en el navegador no consigue una segunda carta.
+    tiene carta publicada), se publica el mensaje con las fotos temporales y se responde
+    **202** sin escribir, para no atar la latencia del comprador a los 240 IOPS del
+    disco. Un segundo intento sobre una carta ya **publicada** responde **409
+    LETTER_ALREADY_EXISTS**: quien retrocede en el navegador no consigue una segunda
+    carta. Sobre un borrador la orden sí entra: es el retome desde "Mis dedicatorias" y
+    el worker sobrescribe la carta con lo enviado.
 
     Sin cola —o si la cola falla— se conserva el comportamiento síncrono de siempre:
-    201 con la carta creada y 200 con la existente, que es lo que espera el frontend
-    desplegado hoy.
+    201 con la carta creada y 200 con la existente (un borrador se sobrescribe con lo
+    enviado y se publica; una publicada se devuelve tal cual), que es lo que espera el
+    frontend desplegado hoy.
     """
     outcome = await service.create_letter(user, payload)
     response.status_code = outcome.status
@@ -191,6 +195,24 @@ async def update_letter(
     service: CommerceService = Depends(commerce_service),
 ):
     return await service.update_letter(user, letter_id, payload)
+
+
+# --- Mis dedicatorias ------------------------------------------------------------------
+
+
+@router.get("/me/dedications", response_model=list[DedicationResponse])
+async def my_dedications(
+    user: User = Depends(current_user),
+    service: CommerceService = Depends(commerce_service),
+):
+    """Panel posventa: cartas publicadas y borradores por retomar, en una sola consulta.
+
+    Un borrador es una compra pagada sin carta (el editor no autoguarda) o una carta
+    que quedó sin publicar. Para retomarlo el frontend abre el editor con el
+    ``purchaseId`` y envía ``POST /letters`` como siempre: si había borrador, se
+    sobrescribe con lo nuevo y se publica.
+    """
+    return await service.list_dedications(user)
 
 
 @router.post(

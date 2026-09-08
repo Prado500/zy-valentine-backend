@@ -36,6 +36,7 @@ from app.models.user import User
 from app.repositories import commerce as repo
 from app.schemas.commerce import (
     CommerceHealth,
+    DedicationResponse,
     DeliveryResponse,
     EagerPhotoResponse,
     IdentityDocumentInput,
@@ -55,7 +56,7 @@ from app.schemas.commerce import (
     ResendInput,
     TempPhotoRef,
 )
-from app.services import deliveries, identity, letters, purchases, webhooks
+from app.services import dedications, deliveries, identity, letters, purchases, webhooks
 from app.services.mailer import Mailer
 from app.services.payments import PaymentGateway
 from app.services.qr import qr_png
@@ -176,12 +177,20 @@ class CommerceService:
         if self.queue.enabled and await self._try_enqueue(user, payload):
             return Outcome(LetterQueued(purchaseId=payload.purchaseId), 202)
         letter, created = await letters.create(self.db, self.settings, user, payload)
-        if created:
+        if created or letter.status == "draft":
+            # Carta nueva, o borrador retomado desde "Mis dedicatorias": en los dos casos
+            # las fotos son las del payload de ahora. Una carta publicada no se toca.
             await letters.attach_temp_photos(
-                self.db, self.settings, self.storage, letter, payload.temp_photos
+                self.db,
+                self.settings,
+                self.storage,
+                letter,
+                payload.temp_photos,
+                replace=not created,
             )
         # También sobre la carta ya existente (200): si un intento anterior murió entre
-        # crear y enviar, el reintento del comprador lo completa sin duplicar el correo.
+        # crear y enviar, o el comprador retomó el borrador, el despacho lo completa sin
+        # duplicar el correo de una versión ya enviada.
         await self._dispatch(letter, payload.autoPublish)
         return Outcome(await self._letter_payload(letter), 201 if created else 200)
 
@@ -207,6 +216,21 @@ class CommerceService:
 
     async def get_letter(self, user: User, letter_id: uuid.UUID) -> LetterResponse:
         return await self._letter_payload(await self._owned_letter(user, letter_id))
+
+    async def list_dedications(self, user: User) -> list[DedicationResponse]:
+        """Panel posventa: una fila por compra pagada, con su carta si existe.
+
+        Una sola consulta (``LEFT JOIN``) y sin cuerpo, fotos ni entregas: el panel
+        enseña estado y enlace, y el detalle sigue en ``get_letter``. Así listar no
+        cuesta 1 + 2N consultas, como ``list_letters``.
+        """
+        rows = await repo.dedications_of_user(self.db, user.id)
+        items: list[DedicationResponse] = []
+        for purchase, letter in rows:
+            state = dedications.state_of(purchase, letter)
+            if state is not None:
+                items.append(self._dedication_schema(purchase, letter, state))
+        return items
 
     async def update_letter(
         self, user: User, letter_id: uuid.UUID, payload: LetterUpdate
@@ -352,8 +376,11 @@ class CommerceService:
         if user is None or not user.is_active:
             raise ApiError(404, "USER_UNAVAILABLE", "El comprador no existe o está inactivo.")
 
-        letter, _ = await letters.create(self.db, self.settings, user, payload)
-        await letters.attach_temp_photos(self.db, self.settings, self.storage, letter, refs)
+        letter, created = await letters.create(self.db, self.settings, user, payload)
+        if created or letter.status == "draft":
+            await letters.attach_temp_photos(
+                self.db, self.settings, self.storage, letter, refs, replace=not created
+            )
         await self._dispatch(letter, bool(message.get("autoPublish", True)))
         return letter.id
 
@@ -419,6 +446,24 @@ class CommerceService:
             paidAt=purchase.paid_at,
             expiresAt=purchase.expires_at,
             createdAt=purchase.created_at,
+        )
+
+    def _dedication_schema(
+        self, purchase: Purchase, letter: Letter | None, state: str
+    ) -> DedicationResponse:
+        published = letter is not None and letter.status == "published"
+        return DedicationResponse(
+            purchaseId=purchase.id,
+            letterId=letter.id if letter else None,
+            state=state,
+            title=letter.title if letter else None,
+            recipientName=letter.recipient_name if letter else None,
+            theme=letter.theme if letter else None,
+            publicSlug=letter.public_slug if published else None,
+            publicUrl=letters.public_url(self.settings, letter) if letter else None,
+            paidAt=purchase.paid_at,
+            publishedAt=letter.published_at if letter else None,
+            updatedAt=letter.updated_at if letter else purchase.updated_at,
         )
 
     @staticmethod

@@ -1020,6 +1020,37 @@
      }
     },
     {
+     "name": "My dedications is empty",
+     "event": [
+      {
+       "listen": "test",
+       "script": {
+        "type": "text/javascript",
+        "exec": [
+         "pm.test(\"200\", () => pm.response.to.have.status(200));",
+         "pm.test(\"sin dedicatorias\", () => pm.expect(pm.response.json().length).to.eql(0));"
+        ]
+       }
+      }
+     ],
+     "request": {
+      "method": "GET",
+      "header": [],
+      "url": {
+       "raw": "{{baseUrl}}/api/v1/me/dedications",
+       "host": [
+        "{{baseUrl}}"
+       ],
+       "path": [
+        "api",
+        "v1",
+        "me",
+        "dedications"
+       ]
+      }
+     }
+    },
+    {
      "name": "Unknown public letter",
      "event": [
       {
@@ -1357,6 +1388,41 @@
       "body": {
        "mode": "raw",
        "raw": "{}"
+      }
+     }
+    },
+    {
+     "name": "My dedications shows the published letter",
+     "event": [
+      {
+       "listen": "test",
+       "script": {
+        "type": "text/javascript",
+        "exec": [
+         "pm.test(\"200\", () => pm.response.to.have.status(200));",
+         "const items = pm.response.json();",
+         "pm.test(\"una fila por compra pagada\", () => pm.expect(items.length).to.eql(1));",
+         "pm.test(\"publicada\", () => pm.expect(items[0].state).to.eql(\"published\"));",
+         "pm.test(\"misma carta\", () => pm.expect(items[0].letterId).to.eql(pm.environment.get(\"letterId\")));",
+         "pm.test(\"con enlace\", () => pm.expect(items[0].publicSlug).to.eql(pm.environment.get(\"publicSlug\")));"
+        ]
+       }
+      }
+     ],
+     "request": {
+      "method": "GET",
+      "header": [],
+      "url": {
+       "raw": "{{baseUrl}}/api/v1/me/dedications",
+       "host": [
+        "{{baseUrl}}"
+       ],
+       "path": [
+        "api",
+        "v1",
+        "me",
+        "dedications"
+       ]
       }
      }
     },

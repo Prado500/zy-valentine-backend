@@ -12,6 +12,7 @@ ejecutó con credenciales reales.
 | Una compra pagada habilita exactamente una carta | `letters.purchase_id` **UNIQUE** + `SELECT … FOR UPDATE` sobre la compra |
 | Consultar o reenviar una carta no consume otra compra | Ningún camino de `letters`/`deliveries` crea compras; el reenvío solo inserta en `letter_deliveries` |
 | El doble clic, varias pestañas o un reintento no crean una segunda carta | `INSERT … ON CONFLICT DO NOTHING` sobre `purchase_id`; la petición perdedora devuelve **200** con la misma carta |
+| Retomar un borrador no crea otra carta | `POST /api/v1/letters` sobre una compra con carta en **borrador** sobrescribe esa fila con el contenido y las fotos nuevas (mismo `id`, mismo slug) y la publica; sobre una carta **publicada** la devuelve tal cual |
 | Una compra repetida con la misma clave no se duplica | `uq_purchases_user_idempotency (user_id, idempotency_key)` + `ON CONFLICT DO NOTHING` |
 | El pago se verifica en el servidor | `POST /purchases/{id}/verify` consulta al proveedor; el retorno del navegador sin `paymentId` deja la compra en `pending` |
 | Un webhook repetido no se procesa dos veces | `uq_payment_events_provider_event (provider, event_id)` |
@@ -54,7 +55,7 @@ un reembolso posterior no borra la carta ya publicada.
 | #2 pago | Checkout de Mercado Pago (fuera de la API) | La API no ve la tarjeta ni datos de pago |
 | #3 verificación | `POST /api/v1/purchases/{id}/verify` con `{"paymentId": …}` | Consulta al proveedor y aplica el estado; sin `paymentId` solo informa |
 | #3 bis | `POST /api/v1/webhooks/mercadopago` | Firma HMAC obligatoria, idempotente, tolerante al desorden |
-| #4 carta | `POST /api/v1/letters` | Exige compra propia y `paid`; si ya existe devuelve la misma con 200 |
+| #4 carta | `POST /api/v1/letters` | Exige compra propia y `paid`. Si ya hay carta: en borrador la sobrescribe con lo enviado y responde 200 (retomar desde "Mis dedicatorias"); publicada, la devuelve tal cual con 200 (409 en el camino con cola) |
 | #5 antifraude | mismo endpoint | Bloqueo `FOR UPDATE` + UNIQUE: una compra pagada, una carta |
 | #6 persistencia | `PATCH /letters/{id}`, `POST /letters/{id}/photos` | Solo mientras la carta sea borrador (`autoPublish=false`) |
 | #7 entrega | `POST /api/v1/letters` (por defecto) o `POST /letters/{id}/publish` | Publica, genera slug y QR, y envía el correo dejando el estado en `letter_deliveries`. Con `recipientEmail` y `autoPublish` (por defecto `true`) ocurre en el mismo acto de crear la carta, tanto en el camino síncrono como en el worker |
@@ -90,6 +91,14 @@ de un navegador y se autentica por firma HMAC.
 //                                         (para cartas creadas con autoPublish=false)
 // POST /api/v1/letters/{id}/deliveries  202  { "recipientEmail": "…"? }  ← reenvío
 
+// GET /api/v1/me/dedications          200 — "Mis dedicatorias": una fila por compra pagada
+[ { "purchaseId": "uuid", "letterId": "uuid|null", "state": "draft|published",
+    "title": "…|null", "recipientName": "…|null", "theme": "…|null",
+    "publicSlug": "…|null", "publicUrl": "…|null",
+    "paidAt": "…", "publishedAt": "…|null", "updatedAt": "…" } ]
+                                        // sin cuerpo, fotos ni entregas: el detalle sigue en
+                                        // GET /api/v1/letters/{id}
+
 // GET /api/v1/public/letters/{slug}   200 — sin usuario, sin correo del comprador, sin cédula
 { "letterId": "uuid", "publishedVersion": 1, "title": "…", "recipientName": "…",
   "body": "…", "theme": "classic", "photos": [ { "position": 0, "caption": "…", "url": "…" } ],
@@ -110,6 +119,7 @@ Errores: `{ "code", "message", "fieldErrors", "requestId" }`.
 | `LETTER_NOT_FOUND` | 404 | La carta no es del usuario |
 | `LETTER_FROZEN` | 409 | Se intenta editar, publicar de nuevo o cambiar fotos de una carta publicada |
 | `LETTER_NOT_PUBLISHED` | 409 | Se intenta enviar o pedir QR de un borrador |
+| `LETTER_ALREADY_EXISTS` | 409 | Camino con cola: la compra ya tiene una carta **publicada**. Un borrador sí se encola y el worker lo sobrescribe |
 | `RECIPIENT_EMAIL_REQUIRED` | 422 | Falta el correo de destino al publicar |
 | `PHOTO_TOO_LARGE` / `UNSUPPORTED_MEDIA` | 413 / 415 | Supera `MAX_PHOTO_BYTES`; no es JPEG/PNG/WebP |
 | `PHOTO_LIMIT_REACHED` / `PHOTO_POSITION_TAKEN` | 409 | Máximo de fotos; posición ocupada |
@@ -151,13 +161,28 @@ la compra, y el reenvío crea un nuevo intento.
 También hay QR como imagen: `GET /api/v1/letters/{id}/qr.png` (dueño) y
 `GET /api/v1/public/letters/{slug}/qr.png` (público).
 
-## 9. "Mis cartas"
+## 9. "Mis cartas" y "Mis dedicatorias"
 
 `GET /api/v1/letters` devuelve, por cada carta del comprador: estado, borrador
 recuperable con su contenido y fotos, compra asociada, enlace público y QR cuando está
 publicada, y el historial de entregas con su estado. `GET /api/v1/purchases` añade el
 estado de pago y `hasLetter`. Con eso el frontend arma la biblioteca: ver, consultar
 estado de pago y entrega, reenviar y continuar borradores.
+
+`GET /api/v1/me/dedications` es el panel posventa: una fila por compra **pagada**, con su
+carta si existe, en una sola consulta (`LEFT JOIN`) y sin cuerpo, fotos ni entregas. El
+estado se deriva al leer y no se guarda (ninguna migración):
+
+- `draft`: compra pagada sin carta, o carta en borrador. No hay autoguardado en el
+  editor: quien pagó y cerró la pestaña no dejó fila de carta, y su borrador **es** la
+  compra pagada.
+- `published`: carta publicada. Se conserva aunque la compra se anule después por un
+  reembolso: el enlace que recibió el destinatario sigue vivo.
+
+Las compras sin pagar no aparecen. Para retomar un borrador el frontend abre el editor
+con el `purchaseId` y envía `POST /api/v1/letters` como siempre: si había carta en
+borrador se sobrescribe con el contenido y las fotos nuevas y se publica; una publicada
+no se toca.
 
 ## 10. Qué se probó localmente y qué depende de terceros
 
