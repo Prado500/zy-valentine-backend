@@ -2,7 +2,7 @@ from functools import lru_cache
 from typing import Literal
 from urllib.parse import urlsplit
 
-from pydantic import Field, SecretStr, ValidationError, model_validator
+from pydantic import Field, SecretStr, ValidationError, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy.engine import make_url
 
@@ -163,6 +163,10 @@ class Settings(BaseSettings):
     # Azure App Service define WEBSITE_SITE_NAME automáticamente. Sirve para detectar
     # un despliegue real y exigir que APP_ENV se declare de forma explícita.
     website_site_name: str | None = None
+    # Azure también define WEBSITE_HOSTNAME=<app>.azurewebsites.net. csrf_guard lo usa
+    # como segunda fuente para reconocer el origen propio (Swagger en /docs) si el
+    # Host llegara reescrito por un proxy.
+    website_hostname: str | None = None
 
     # --- Sesión y autenticación --------------------------------------------------
     session_minutes: int = Field(default=30, ge=1, le=1440)
@@ -235,6 +239,21 @@ class Settings(BaseSettings):
 
     # --- Reglas de negocio -----------------------------------------------------------
     freeze_letter_after_publish: bool = True
+
+    @field_validator("cors_origins", "frontend_url", mode="before")
+    @classmethod
+    def normalize_origins(cls, value):
+        """Tolera lo que se pega a mano en el portal: espacios, barra final y mayúsculas.
+
+        ``https://Front.example.com/`` pasa a ``https://front.example.com``, que es lo
+        que el navegador envía en ``Origin``. Rutas, comodines y esquemas raros siguen
+        fallando en ``_validate_origin``: solo se normaliza lo que no cambia el origen.
+        """
+        if isinstance(value, str):
+            return _normalize_origin(value)
+        if isinstance(value, list | tuple):
+            return [_normalize_origin(item) for item in value]
+        return value
 
     @model_validator(mode="after")
     def validate_runtime(self):
@@ -355,6 +374,12 @@ class Settings(BaseSettings):
     @property
     def sender_address(self) -> str:
         return self.mail_from or self.mail_username or "no-reply@zyvencore.local"
+
+
+def _normalize_origin(origin):
+    if not isinstance(origin, str):
+        return origin
+    return origin.strip().rstrip("/").lower()
 
 
 def _validate_origin(origin: str, field: str) -> None:

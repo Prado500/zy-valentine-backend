@@ -9,15 +9,21 @@ servicios comparten la **misma** sesión dentro de una petición: FastAPI cachea
 dependencia por petición, y con ello se mantiene una única unidad de trabajo.
 """
 
+import logging
 import secrets
+from typing import Annotated
+from urllib.parse import urlsplit
 
-from fastapi import Depends, Request
+from fastapi import Depends, Header, Request
 
+from app.core.config import Settings
 from app.core.errors import ApiError
 from app.core.security import verify_csrf
 from app.models.user import User
 from app.services.accounts import AccountService
 from app.services.commerce import CommerceService
+
+LOG = logging.getLogger("app.csrf")
 
 
 async def get_db(request: Request):
@@ -49,12 +55,49 @@ async def account_service(request: Request, db=Depends(get_db)) -> AccountServic
     )
 
 
-def csrf_guard(request: Request) -> str:
+def _is_own_origin(request: Request, settings: Settings, origin: str) -> bool:
+    """¿El ``Origin`` es este mismo backend? Cubre Swagger (``/docs``) y cualquier
+    página servida por la API. Un navegador solo puede emitir ese ``Origin`` desde
+    una página alojada en este host, así que no abre la puerta a terceros.
+
+    Se compara host contra host y no la URL completa: uvicorn corre con
+    ``--no-proxy-headers``, así que dentro del contenedor ``request.url.scheme`` es
+    ``http`` aunque el navegador hable HTTPS con Azure.
+    """
+    parsed = urlsplit(origin)
+    schemes = ("https",) if settings.secure_cookies else ("http", "https")
+    if parsed.scheme not in schemes or not parsed.netloc or parsed.path:
+        return False
+    own_hosts = {request.url.netloc.lower()}
+    if settings.website_hostname:
+        own_hosts.add(settings.website_hostname.lower())
+    return parsed.netloc.lower() in own_hosts
+
+
+def csrf_guard(
+    request: Request,
+    x_csrf_token: Annotated[
+        str, Header(description="Token devuelto por GET /api/v1/auth/csrf.")
+    ] = "",
+) -> str:
     settings = request.app.state.settings
     origin = request.headers.get("origin")
-    if origin and origin not in settings.cors_origins:
+    if (
+        origin
+        and origin not in settings.cors_origins
+        and not _is_own_origin(request, settings, origin)
+    ):
+        # Solo al log: la respuesta sigue siendo genérica. El origen y la lista no
+        # son secretos, y son justo lo que hace falta para leer el Log stream.
+        LOG.warning(
+            "CSRF: origen rechazado %r; host=%s; permitidos=%s",
+            origin,
+            request.url.netloc,
+            settings.cors_origins,
+        )
         raise ApiError(403, "CSRF_INVALID", "Origen no permitido.")
-    token = request.headers.get("x-csrf-token", "")
+    # Declarada como Header para que aparezca en OpenAPI y Swagger la pueda enviar.
+    token = x_csrf_token
     cookie = request.cookies.get(settings.csrf_cookie, "")
     if (
         not token
