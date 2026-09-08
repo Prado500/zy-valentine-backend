@@ -10,7 +10,7 @@
    "script": {
     "type": "text/javascript",
     "exec": [
-     "if (!pm.environment.get(\"email\")) { pm.environment.set(\"email\", \"postman-\" + Date.now() + \"@example.com\"); pm.environment.set(\"password\", \"Local-only-\" + pm.variables.replaceIn(\"{{$guid}}\")); }",
+     "if (!pm.environment.get(\"email\")) { pm.environment.set(\"email\", \"postman-\" + Date.now() + \"@example.com\"); pm.environment.set(\"password\", \"pw-\" + String(Date.now()).slice(-7)); }",
      "if (!pm.environment.get(\"idempotencyKey\")) { pm.environment.set(\"idempotencyKey\", \"pm-\" + Date.now()); }"
     ]
    }
@@ -129,7 +129,7 @@
       "url": "{{baseUrl}}/api/v1/auth/register",
       "body": {
        "mode": "raw",
-       "raw": "{\n  \"email\": \"{{email}}\",\n  \"password\": \"short\",\n  \"name\": \"Postman Local\"\n}",
+       "raw": "{\n  \"email\": \"{{email}}\",\n  \"password\": \"abc\",\n  \"name\": \"Postman Local\"\n}",
        "options": {
         "raw": {
          "language": "json"

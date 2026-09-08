@@ -18,6 +18,7 @@ from app.core.config import (
     get_settings,
 )
 from app.core.dsn import DsnError, split_ssl_query
+from tests.conftest import BUYER
 
 BASE = "postgresql+asyncpg://user:pass@srv.postgres.database.azure.com:5432/db_zv_develop"
 REMOTE = {
@@ -171,7 +172,7 @@ def test_legacy_jwt_variables_are_ignored(settings, monkeypatch):
 async def test_api_never_returns_a_bearer_token(client, buyer):
     """La sesión viaja solo en cookie HttpOnly; no hay token para el cliente."""
     response = await client.post(
-        "/api/v1/auth/login", json={"email": buyer["email"], "password": "Long-test-password-123!"}
+        "/api/v1/auth/login", json={"email": buyer["email"], "password": BUYER["password"]}
     )
     assert "authorization" not in {k.lower() for k in response.headers}
     body = response.json()

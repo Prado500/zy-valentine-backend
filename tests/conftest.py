@@ -278,7 +278,7 @@ def gateway(app):
 
 BUYER = {
     "email": "comprador@example.com",
-    "password": "Long-test-password-123!",
+    "password": "pw-buyer1",
     "name": "Comprador",
 }
 
