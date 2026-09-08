@@ -291,8 +291,9 @@ falta para que el navegador mande la cookie) y las cabeceras permitidas se limit
 
 - `get_db` → abre una `AsyncSession` por petición con `async with`; al terminar (incluso
   con excepción) se cierra y devuelve la conexión al pool.
-- `csrf_guard` → si viene cabecera `Origin` y no está en la lista permitida, 403 antes
-  de nada. Después compara cookie y cabecera con `secrets.compare_digest` (comparación
+- `csrf_guard` → si viene cabecera `Origin` y no está en la lista permitida ni es el
+  propio host del backend (Swagger en `/docs`), 403 antes de nada. La cabecera
+  `X-CSRF-Token` se declara como `Header` para que Swagger la muestre. Después compara cookie y cabecera con `secrets.compare_digest` (comparación
   en tiempo constante) y verifica la firma y la vigencia. Devuelve el token, que el
   endpoint de Google reutiliza como *nonce*.
 - `auth_limit` → aplica el limitador con `request.client.host`. Detrás de un proxy, sin

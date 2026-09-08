@@ -92,7 +92,7 @@ la rama `main` corresponde a `APP_ENV=production`, y no se infiere desde git.
 | `DB_CONNECTION_BUDGET` / `DB_RESERVED_CONNECTIONS` | 20 / 2 | 20 / 2 | Presupuesto declarado en `Iops.md` |
 | `PORT` | 8000 | El que exponga App Service | El Dockerfile lo respeta |
 | `SESSION_MINUTES` / `CSRF_SECONDS` | 30 / 3600 | igual | |
-| `COOKIE_SAMESITE` | `lax` | `lax`, o `none` solo con diseño cross-site | `none` exige cookies seguras |
+| `COOKIE_SAMESITE` | `lax` | `none` si el frontend (SWA) y el backend (App Service) están en dominios distintos; `lax` si comparten dominio | `none` exige cookies seguras; Safari bloquea cookies de terceros, así que la solución definitiva es un dominio compartido |
 | `AUTH_RATE_LIMIT` / `AUTH_RATE_WINDOW` | 30 / 60 | igual | Límite **por proceso**, no distribuido |
 | `GOOGLE_CLIENT_ID` | opcional | Cliente web de Google | Vacío ⇒ `/auth/google` responde 503 `GOOGLE_NOT_CONFIGURED` |
 | `PII_HMAC_KEY` | Generada local | Secreto propio | HMAC de la cédula; si falta deriva de `SESSION_SECRET`. Rotarla invalida los documentos ya guardados |
