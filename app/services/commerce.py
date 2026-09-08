@@ -165,11 +165,13 @@ class CommerceService:
     # --- Cartas ----------------------------------------------------------------------
 
     async def create_letter(self, user: User, payload: LetterCreate) -> Outcome:
-        """IOP #4 a #6: valida la compra, encola si se puede y escribe si no.
+        """IOP #4 a #7: valida la compra, encola si se puede y escribe (y envía) si no.
 
         Con la cola disponible se responde 202 sin escribir nada. Sin ella —o si el
-        transporte falla— se conserva el camino síncrono de siempre, incluido el
-        traslado de las fotos del contenedor efímero.
+        transporte falla— se conserva el camino síncrono: se escribe la carta, se
+        trasladan las fotos del contenedor efímero y se **despacha** igual que lo
+        haría el worker (publicar y enviar el correo). Antes este camino se detenía
+        en el borrador y el comprador esperaba un correo que nadie mandaba.
         """
         if self.queue.enabled and await self._try_enqueue(user, payload):
             return Outcome(LetterQueued(purchaseId=payload.purchaseId), 202)
@@ -178,6 +180,9 @@ class CommerceService:
             await letters.attach_temp_photos(
                 self.db, self.settings, self.storage, letter, payload.temp_photos
             )
+        # También sobre la carta ya existente (200): si un intento anterior murió entre
+        # crear y enviar, el reintento del comprador lo completa sin duplicar el correo.
+        await self._dispatch(letter, payload.autoPublish)
         return Outcome(await self._letter_payload(letter), 201 if created else 200)
 
     async def _try_enqueue(self, user: User, payload: LetterCreate) -> bool:
@@ -349,15 +354,25 @@ class CommerceService:
 
         letter, _ = await letters.create(self.db, self.settings, user, payload)
         await letters.attach_temp_photos(self.db, self.settings, self.storage, letter, refs)
+        await self._dispatch(letter, bool(message.get("autoPublish", True)))
+        return letter.id
 
-        if not (message.get("autoPublish", True) and letter.recipient_email):
-            return letter.id
+    async def _dispatch(self, letter: Letter, auto_publish: bool) -> None:
+        """IOP #7 para cualquier camino: publica si hace falta y envía una vez por versión.
+
+        Es el único sitio donde una carta recién escrita pasa a ``published`` y se
+        manda el correo, para que el camino síncrono y el worker no vuelvan a divergir.
+        Sin correo de destino no hay nada que despachar y la carta queda en borrador.
+        Un fallo de SMTP no rompe la petición: ``deliver`` deja la entrega en ``failed``
+        y el comprador puede reintentar con ``POST /letters/{id}/deliveries``.
+        """
+        if not (auto_publish and letter.recipient_email):
+            return
         if letter.status != "published":
             await letters.publish(self.db, self.settings, letter)
         if await self._already_delivered(letter):
-            return letter.id
+            return
         await deliveries.deliver(self.db, self.settings, self.mailer, letter, storage=self.storage)
-        return letter.id
 
     async def _already_delivered(self, letter: Letter) -> bool:
         """Una reentrega no vuelve a enviar el correo de la misma versión publicada."""

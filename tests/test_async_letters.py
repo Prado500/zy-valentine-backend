@@ -217,6 +217,12 @@ async def test_queue_failure_falls_back_to_the_synchronous_path(client, paid_pur
 
     app.state.letter_queue = BrokenPublisher()
     response = await create_letter(client, paid_purchase)
-    # La carta no se pierde: se escribe en el acto, como antes de existir la cola.
+    # La carta no se pierde: se escribe en el acto, como antes de existir la cola, y
+    # se despacha igual que lo haría el worker: publicada y con el correo enviado.
     assert response.status_code == 201
-    assert response.json()["title"] == LETTER["title"]
+    body = response.json()
+    assert body["title"] == LETTER["title"]
+    assert body["status"] == "published"
+    assert body["publicUrl"]
+    assert [item["status"] for item in body["deliveries"]] == ["sent"]
+    assert app.state.mailer.sent[-1].to == LETTER["recipientEmail"]

@@ -130,7 +130,7 @@ async def enqueue(
         # Una clave efímera solo la puede reclamar quien la subió.
         if temp_key_owner(photo.tempId) != str(user.id):
             raise ApiError(403, "TEMP_PHOTO_FORBIDDEN", "Esa foto temporal no es de esta cuenta.")
-    message = build_letter_message(user.id, payload)
+    message = build_letter_message(user.id, payload, auto_publish=payload.autoPublish)
     # message_id derivado de la compra: con detección de duplicados activa en la cola,
     # dos pestañas encolan una sola carta.
     return await queue.publish(message, message_id=f"letter-{payload.purchaseId}")
