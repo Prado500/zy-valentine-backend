@@ -26,7 +26,7 @@ from app.core.html import sanitize
 from app.models.commerce import Letter, LetterPhoto
 from app.models.user import User
 from app.repositories import commerce
-from app.schemas.commerce import LetterCreate, LetterUpdate, TempPhotoRef
+from app.schemas.commerce import LetterCreate, LetterInput, LetterUpdate, TempPhotoRef
 from app.services.service_bus import LetterPublisher, build_letter_message
 from app.services.storage import (
     ALLOWED_CONTENT_TYPES,
@@ -51,10 +51,31 @@ def public_url(settings: Settings, letter: Letter) -> str | None:
     return f"{settings.public_base_url}/carta/{letter.public_slug}"
 
 
+def content_values(payload: LetterInput) -> dict:
+    """Columnas de contenido tal como llegan del formulario.
+
+    Una sola traducción para crear la carta y para sobrescribir un borrador retomado,
+    de modo que las dos escrituras no puedan divergir.
+    """
+    return {
+        "title": payload.title,
+        "recipient_name": payload.recipientName,
+        "recipient_email": (
+            str(payload.recipientEmail).casefold() if payload.recipientEmail else None
+        ),
+        "body": payload.body,
+        "theme": payload.theme,
+    }
+
+
 async def create(
     db: AsyncSession, settings: Settings, user: User, payload: LetterCreate
 ) -> tuple[Letter, bool]:
-    """Devuelve (carta, creada). Un segundo intento sobre la misma compra devuelve la misma carta."""
+    """Devuelve (carta, creada). Nunca hay una segunda carta para la misma compra.
+
+    Si la compra ya tiene carta en borrador, se sobrescribe con este payload (retomar
+    desde "Mis dedicatorias"); si ya está publicada, se devuelve tal cual.
+    """
     purchase = await commerce.lock_purchase(db, payload.purchaseId)
     if purchase is None or purchase.user_id != user.id:
         raise ApiError(404, "PURCHASE_NOT_FOUND", "La compra no existe para esta cuenta.")
@@ -62,7 +83,17 @@ async def create(
         raise ApiError(409, "PURCHASE_NOT_PAID", "La compra aún no está confirmada por el pago.")
     existing = await commerce.letter_of_purchase(db, purchase.id)
     if existing:
-        # El bloqueo se libera al cerrar la sesión de la petición; no se toca la compra.
+        if existing.status == "published":
+            # Publicada: su contenido está fijo. El reintento devuelve la misma carta y
+            # el despacho no vuelve a enviar el correo de esa versión.
+            return existing, False
+        # Borrador retomado. No hay autoguardado, así que lo que llega ahora es la carta
+        # entera y sustituye lo que quedó a medias, bajo el mismo bloqueo de la compra.
+        # Sigue siendo una carta por compra: cambia el contenido, no la fila ni el slug.
+        for column, value in content_values(payload).items():
+            setattr(existing, column, value)
+        await db.commit()
+        await db.refresh(existing)
         return existing, False
     # ON CONFLICT DO NOTHING sobre purchase_id: si otra transacción ganó la carrera,
     # esta petición devuelve la carta existente en vez de fallar o crear una segunda.
@@ -74,13 +105,7 @@ async def create(
             user_id=user.id,
             public_slug=secrets.token_urlsafe(16),
             status="draft",
-            title=payload.title,
-            recipient_name=payload.recipientName,
-            recipient_email=(
-                str(payload.recipientEmail).casefold() if payload.recipientEmail else None
-            ),
-            body=payload.body,
-            theme=payload.theme,
+            **content_values(payload),
         )
         .on_conflict_do_nothing(index_elements=[Letter.purchase_id])
         .returning(Letter.id)
@@ -105,9 +130,9 @@ async def enqueue(
     """IOP #5: valida en caliente y publica en la cola. Devuelve si quedó encolada.
 
     Antes de encolar nada se consulta la base de forma síncrona y se aborta si la
-    compra no existe, no es de esta cuenta, no está pagada o **ya tiene carta**: los
-    tres casos responden 4xx sin escribir nada. Son dos SELECT por índice, el precio
-    mínimo para que la cola no acepte órdenes fraudulentas.
+    compra no existe, no es de esta cuenta, no está pagada o **ya tiene una carta
+    publicada**: los tres casos responden 4xx sin escribir nada. Son dos SELECT por
+    índice, el precio mínimo para que la cola no acepte órdenes fraudulentas.
 
     ``False`` significa que el transporte no aceptó el mensaje; el llamador cae al
     camino síncrono en vez de perder la carta del comprador. No se toma ``FOR UPDATE``:
@@ -119,10 +144,13 @@ async def enqueue(
         raise ApiError(404, "PURCHASE_NOT_FOUND", "La compra no existe para esta cuenta.")
     if purchase.status != "paid":
         raise ApiError(409, "PURCHASE_NOT_PAID", "La compra aún no está confirmada por el pago.")
-    if await commerce.letter_of_purchase(db, purchase.id):
+    existing = await commerce.letter_of_purchase(db, purchase.id)
+    if existing is not None and existing.status == "published":
         # Antitrampa: volver atrás en el navegador y reenviar el formulario no habilita
         # una segunda carta. Se corta aquí, antes de encolar: si la orden entrase en la
-        # cola, el fraude se detectaría tarde y habría gastado IOPS del worker.
+        # cola, el fraude se detectaría tarde y habría gastado IOPS del worker. Un
+        # borrador sí pasa: es el retome desde "Mis dedicatorias", y el worker lo
+        # sobrescribe en ``create`` en vez de crear otra carta.
         raise ApiError(409, "LETTER_ALREADY_EXISTS", "Esta compra ya tiene su carta.")
     if len(payload.temp_photos) > settings.max_photos_per_letter:
         raise ApiError(409, "PHOTO_LIMIT_REACHED", "Se alcanzó el máximo de fotos.")
@@ -132,8 +160,13 @@ async def enqueue(
             raise ApiError(403, "TEMP_PHOTO_FORBIDDEN", "Esa foto temporal no es de esta cuenta.")
     message = build_letter_message(user.id, payload, auto_publish=payload.autoPublish)
     # message_id derivado de la compra: con detección de duplicados activa en la cola,
-    # dos pestañas encolan una sola carta.
-    return await queue.publish(message, message_id=f"letter-{payload.purchaseId}")
+    # dos pestañas encolan una sola carta. Al retomar un borrador el id lleva un sufijo
+    # único: si repitiera el de la creación, Service Bus descartaría el retome como
+    # duplicado dentro de su ventana y el comprador esperaría un correo que no saldría.
+    message_id = f"letter-{payload.purchaseId}"
+    if existing is not None:
+        message_id = f"{message_id}-{secrets.token_hex(4)}"
+    return await queue.publish(message, message_id=message_id)
 
 
 async def eager_upload(
@@ -196,12 +229,47 @@ def ordered_refs(refs: list[TempPhotoRef]) -> list[TempPhotoRef]:
     ]
 
 
+async def discard_stale_photos(
+    db: AsyncSession,
+    storage: StorageBackend,
+    letter: Letter,
+    existing: list[LetterPhoto],
+    refs: list[TempPhotoRef],
+) -> list[LetterPhoto]:
+    """Al retomar un borrador, las fotos pasan a ser las del payload de ahora.
+
+    Se conservan las que este payload vuelve a traer: su destino determinista
+    (:func:`permanent_key`) coincide con una fila existente, que es justo lo que ocurre
+    cuando un mensaje de la cola se reentrega después de haber movido los blobs.
+    Borrarlas las perdería para siempre, porque el temporal ya está vacío.
+
+    Las filas se sueltan primero y en una sola transacción; el blob se borra después y
+    su fallo solo se anota: un archivo huérfano en el contenedor es barato, una carta
+    pagada que no sale no lo es.
+    """
+    keep = {permanent_key(letter, ref) for ref in refs}
+    stale = [photo for photo in existing if photo.storage_key not in keep]
+    if not stale:
+        return existing
+    for photo in stale:
+        await db.delete(photo)
+    await db.commit()
+    for photo in stale:
+        try:
+            await storage.delete(photo.storage_key)
+        except Exception:  # noqa: BLE001 - un blob huérfano no vale una carta pagada
+            LOG.warning("No se pudo borrar el blob %s de la carta %s", photo.storage_key, letter.id)
+    return [photo for photo in existing if photo.storage_key in keep]
+
+
 async def attach_temp_photos(
     db: AsyncSession,
     settings: Settings,
     storage: StorageBackend,
     letter: Letter,
     refs: list[TempPhotoRef],
+    *,
+    replace: bool = False,
 ) -> list[LetterPhoto]:
     """IOP #6: traslada del contenedor efímero al permanente y registra las filas.
 
@@ -214,21 +282,31 @@ async def attach_temp_photos(
     - y **omite** las que se perdieron, en vez de tumbar el mensaje entero: una carta
       pagada debe salir aunque falte una foto, y volver a intentarlo no la traería.
 
+    Con ``replace`` (borrador retomado) las fotos pasan a ser las de este payload: las
+    que ya tenía la carta y no vuelven a llegar se descartan antes de trasladar nada.
+
     El nombre original del archivo se guarda en ``caption`` para que el comprador
     reconozca su foto en el visor y en el correo.
     """
-    if not refs:
+    if not refs and not replace:
         return []
+    pending = ordered_refs(refs)[: settings.max_photos_per_letter]
+    for ref in pending:
+        # Una clave efímera solo la puede reclamar quien la subió. Se comprueba todo
+        # antes de tocar nada: ni se borra ni se mueve una foto por un payload ajeno.
+        if temp_key_owner(ref.tempId) != str(letter.user_id):
+            raise ApiError(403, "TEMP_PHOTO_FORBIDDEN", "Esa foto temporal no es de esta cuenta.")
     existing = await commerce.photos_of_letter(db, letter.id)
+    if replace:
+        existing = await discard_stale_photos(db, storage, letter, existing, pending)
+    if not pending:
+        return existing
     known = {photo.storage_key for photo in existing}
     taken = {photo.position for photo in existing}
-    pending = ordered_refs(refs)[: settings.max_photos_per_letter]
 
     photos: list[LetterPhoto] = []
     position = 0
     for ref in pending:
-        if temp_key_owner(ref.tempId) != str(letter.user_id):
-            raise ApiError(403, "TEMP_PHOTO_FORBIDDEN", "Esa foto temporal no es de esta cuenta.")
         key = permanent_key(letter, ref)
         if key in known:
             continue  # Ya trasladada y registrada en una entrega anterior.

@@ -563,8 +563,12 @@ POST /api/v1/purchases      {idempotencyKey}          → 201 (repetir: 200, mis
 POST /api/v1/purchases/{id}/verify {paymentId}        → 200, purchase.status = "paid"
 POST /api/v1/letters        {purchaseId, title, recipientEmail, temp_photos, …}
                                                       → 201 publicada + publicUrl + qrUrl + correo
-                                                        enviado (repetir: 200, misma carta, sin
-                                                        segundo correo; con Service Bus: 202)
+                                                        enviado (repetir sobre una publicada: 200,
+                                                        misma carta, sin segundo correo; sobre un
+                                                        borrador: se sobrescribe y se publica;
+                                                        con Service Bus: 202)
+GET  /api/v1/me/dedications                           → "Mis dedicatorias": una fila por compra
+                                                        pagada, state draft | published
    … flujo alternativo con {"autoPublish": false}: la carta queda en borrador …
 POST /api/v1/letters/{id}/photos   (multipart)        → 201 (solo borrador)
 POST /api/v1/letters/{id}/publish                     → 200 + publicUrl + qrUrl + correo enviado

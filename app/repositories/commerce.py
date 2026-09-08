@@ -2,7 +2,7 @@
 
 import uuid
 
-from sqlalchemy import select
+from sqlalchemy import Select, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.commerce import (
@@ -145,3 +145,29 @@ async def deliveries_of_letter(db: AsyncSession, letter_id: uuid.UUID) -> list[L
         .order_by(LetterDelivery.created_at.desc())
     )
     return list(result)
+
+
+def dedications_statement(user_id: uuid.UUID) -> Select:
+    """Compras posventa del usuario con su carta, si la hay, en un solo ``LEFT JOIN``.
+
+    Una consulta para todo el panel: ni una por compra ni una por foto o entrega. Se
+    traen las compras pagadas (con carta o sin ella) y, además, cualquier carta ya
+    publicada aunque su compra se haya anulado después. Se separa del ``execute`` para
+    poder comprobar el SQL sin base de datos.
+    """
+    return (
+        select(Purchase, Letter)
+        .outerjoin(Letter, Letter.purchase_id == Purchase.id)
+        .where(
+            Purchase.user_id == user_id,
+            or_(Purchase.status == "paid", Letter.status == "published"),
+        )
+        .order_by(Purchase.created_at.desc())
+    )
+
+
+async def dedications_of_user(
+    db: AsyncSession, user_id: uuid.UUID
+) -> list[tuple[Purchase, Letter | None]]:
+    result = await db.execute(dedications_statement(user_id))
+    return [(purchase, letter) for purchase, letter in result.all()]

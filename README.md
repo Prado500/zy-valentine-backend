@@ -71,8 +71,9 @@ copias que se van separando con el tiempo.
 | `POST /api/v1/purchases/{id}/verify` | **Verificación en servidor** del pago |
 | `POST /api/v1/webhooks/mercadopago` | Webhook firmado, idempotente y monótono |
 | `POST /api/v1/letters/photos/eager` | Sube una foto al contenedor efímero antes de crear la carta |
-| `POST /api/v1/letters` | Crea la carta de una compra pagada (202 con cola; 200 si ya existía) |
+| `POST /api/v1/letters` | Crea la carta de una compra pagada (202 con cola; 200 si ya existía: un borrador se sobrescribe y se publica, una publicada se devuelve tal cual) |
 | `GET /api/v1/letters`, `GET /api/v1/letters/{id}` | "Mis cartas": pago, entrega y borradores |
+| `GET /api/v1/me/dedications` | "Mis dedicatorias": panel posventa, una fila por compra pagada con `state` `draft`/`published`, en una sola consulta |
 | `PATCH /api/v1/letters/{id}` | Edita solo mientras sea borrador |
 | `POST`/`DELETE /api/v1/letters/{id}/photos…` | Fotos ordenadas, validadas por firma binaria |
 | `POST /api/v1/letters/{id}/publish` | Publica, genera enlace y QR, y envía el correo |
@@ -197,9 +198,10 @@ python worker.py     # sin cola configurada informa y termina con código 0
    escritura en PostgreSQL. La respuesta trae `tempId`, que es lo que hay que devolver.
 2. **Envío del formulario (IOP #4 y #5).** `POST /api/v1/letters` recibe la carta con
    `temp_photos: [{tempId, fileName}]`, comprueba en la base que la compra existe, es de
-   esta cuenta, está pagada y **no tiene carta**, y publica el mensaje: **202**. Si la
-   compra no está pagada o ya tiene carta responde **409** sin encolar nada, así que
-   retroceder en el navegador no consigue una segunda carta.
+   esta cuenta, está pagada y **no tiene carta publicada**, y publica el mensaje: **202**.
+   Si la compra no está pagada o ya tiene carta publicada responde **409** sin encolar
+   nada, así que retroceder en el navegador no consigue una segunda carta. Un borrador sí
+   se encola: es el retome desde "Mis dedicatorias" y el worker lo sobrescribe.
 3. **Worker (IOP #6).** Escribe la carta, traslada cada foto del contenedor efímero al
    permanente con `move_blob` y guarda el nombre original del archivo en `caption`.
 4. **Correo (IOP #7).** Publica la carta y envía el correo: enlace y QR en el cuerpo, y
