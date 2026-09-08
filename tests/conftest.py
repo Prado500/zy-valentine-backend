@@ -1,23 +1,44 @@
 import os
+import subprocess
+import sys
 import tempfile
+from pathlib import Path
 from urllib.parse import urlsplit
 
 import httpx
 import pytest
 from sqlalchemy import text
 
+REPO_ROOT = Path(__file__).resolve().parent.parent
 LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
 # URL de relleno para construir objetos Settings en pruebas que nunca abren conexión.
 PLACEHOLDER_URL = "postgresql+asyncpg://postgres@127.0.0.1:5432/zy_auth_validation"
 NO_DATABASE = (
     "TEST_DATABASE_URL no está definida: se omiten las pruebas que necesitan PostgreSQL. "
-    "Para ejecutarlas, levanta una base desechable y expórtala:\n"
+    "Para ejecutarlas, levanta una base desechable y expórtala (la suite aplica las "
+    "migraciones por su cuenta):\n"
     "  docker run -d --name zy-test-db -e POSTGRES_PASSWORD=local \\\n"
     "    -e POSTGRES_DB=zy_auth_validation -p 127.0.0.1:5432:5432 postgres:15-alpine\n"
     "  export TEST_DATABASE_URL="
     "postgresql+asyncpg://postgres:local@127.0.0.1:5432/zy_auth_validation\n"
-    "  python -m alembic upgrade head && python -m pytest"
+    "  python -m pytest"
 )
+NOT_DISPOSABLE = (
+    "TEST_DATABASE_URL debe ser una base PostgreSQL desechable en loopback, "
+    "llamada 'zy_auth_validation' o con 'test' en el nombre. "
+    "La suite ejecuta TRUNCATE y migraciones, y nunca debe apuntar a una base real."
+)
+
+
+def is_disposable(url: str) -> bool:
+    """¿Es una base desechable en loopback? Es la única que la suite acepta tocar."""
+    parsed = urlsplit(url)
+    database = parsed.path.lstrip("/")
+    return (
+        parsed.scheme.startswith("postgresql")
+        and parsed.hostname in LOOPBACK_HOSTS
+        and (database == "zy_auth_validation" or "test" in database)
+    )
 
 
 def checked_test_url() -> str:
@@ -36,19 +57,48 @@ def checked_test_url() -> str:
     raw = os.environ.get("TEST_DATABASE_URL", "").strip()
     if not raw:
         return ""
-    parsed = urlsplit(raw)
-    database = parsed.path.lstrip("/")
-    if (
-        not parsed.scheme.startswith("postgresql")
-        or parsed.hostname not in LOOPBACK_HOSTS
-        or not (database == "zy_auth_validation" or "test" in database)
-    ):
-        raise RuntimeError(
-            "TEST_DATABASE_URL debe ser una base PostgreSQL desechable en loopback, "
-            "llamada 'zy_auth_validation' o con 'test' en el nombre. "
-            "La suite ejecuta TRUNCATE y nunca debe apuntar a una base real."
-        )
+    if not is_disposable(raw):
+        raise RuntimeError(NOT_DISPOSABLE)
     return raw
+
+
+def apply_migrations(database_url: str) -> str:
+    """Ejecuta ``alembic upgrade head`` sobre la base desechable y devuelve su salida.
+
+    La suite se provisiona sola en vez de confiar en que alguien —el pipeline o la
+    persona— haya migrado antes de lanzar pytest. En los builds 51 y 52 de CI la base
+    llegó vacía y las 112 pruebas de integración cayeron con ``relation "users" does
+    not exist``: un error que no dice nada del paso que faltó. Ahora, si Alembic
+    falla, se ve su salida completa en un único mensaje.
+
+    Se lanza en un subproceso porque ``alembic/env.py`` abre su propio bucle de
+    eventos con ``asyncio.run`` y no puede ejecutarse dentro del de pytest-asyncio.
+    """
+    if not is_disposable(database_url):
+        raise RuntimeError(NOT_DISPOSABLE)
+    env = {
+        **os.environ,
+        "DATABASE_URL": database_url,
+        "APP_ENV": "local",
+        "DB_SSL_MODE": "disable",
+    }
+    env.pop("DB_SSL_CA_FILE", None)
+    result = subprocess.run(
+        [sys.executable, "-m", "alembic", "upgrade", "head"],
+        cwd=REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=180,
+        check=False,
+    )
+    output = f"{result.stdout}\n{result.stderr}".strip()
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"'alembic upgrade head' falló (código {result.returncode}) sobre la base de "
+            f"pruebas {urlsplit(database_url).path.lstrip('/')} en loopback:\n{output}"
+        )
+    return output
 
 
 test_url = checked_test_url()
@@ -60,7 +110,7 @@ os.environ["DB_SSL_MODE"] = "disable"
 os.environ["SESSION_SECRET"] = "test-only-secret-000000000000000000000"
 os.environ["LOCAL_STORAGE_DIR"] = tempfile.mkdtemp(prefix="zy-storage-")
 from app.core.config import Settings  # noqa: E402
-from app.main import create_app  # noqa: E402
+from app.main import EXPECTED_REVISION, create_app  # noqa: E402
 
 # Variables que este conftest controla a propósito; el resto no debe filtrarse.
 CONTROLLED_ENV = {"DATABASE_URL", "APP_ENV", "DB_SSL_MODE", "SESSION_SECRET", "LOCAL_STORAGE_DIR"}
@@ -107,13 +157,34 @@ def settings(storage_dir):
     )
 
 
+@pytest.fixture(scope="session")
+def migrated_database() -> str:
+    """Base de pruebas con el esquema al día, una sola vez por sesión."""
+    if not test_url:
+        return ""
+    try:
+        apply_migrations(test_url)
+    except RuntimeError as error:
+        pytest.fail(str(error), pytrace=False)
+    return test_url
+
+
 @pytest.fixture
-async def app(settings):
+async def app(settings, migrated_database):
     if not test_url:
         pytest.skip(NO_DATABASE)
     instance = create_app(settings)
     async with instance.router.lifespan_context(instance):
         async with instance.state.engine.begin() as conn:
+            # Misma comprobación que /health/ready: si el esquema no es el esperado,
+            # que lo diga una prueba con un mensaje claro y no 112 con el mismo traceback.
+            revision = await conn.scalar(text("SELECT version_num FROM alembic_version"))
+            if revision != EXPECTED_REVISION:
+                pytest.fail(
+                    f"La base de pruebas está en la revisión {revision!r} y la aplicación "
+                    f"espera {EXPECTED_REVISION!r}. Revisa la salida de 'alembic upgrade head'.",
+                    pytrace=False,
+                )
             # payment_events no referencia a users: se limpia explícitamente.
             await conn.execute(text("TRUNCATE users, payment_events CASCADE"))
         yield instance
