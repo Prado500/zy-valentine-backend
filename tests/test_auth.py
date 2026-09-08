@@ -9,7 +9,7 @@ from sqlalchemy import select, update
 from app.core.errors import ApiError
 from app.models.user import AuthSession, User
 
-ACCOUNT = {"email": "buyer@example.com", "password": "Long-test-password-123!", "name": "Buyer 💌"}
+ACCOUNT = {"email": "buyer@example.com", "password": "pw-buyer1", "name": "Buyer 💌"}
 
 
 async def test_concurrent_registration_has_one_account(client, app):
@@ -70,12 +70,12 @@ async def test_duplicate_email_casefold(client):
 @pytest.mark.parametrize(
     "changes",
     [
-        {"password": "short"},
+        {"password": "abc"},
         {"email": "not-email"},
         {"role": "admin"},
         {"name": "   "},
         {"name": "x" * 121},
-        {"password": "x" * 129},
+        {"password": "x" * 11},
     ],
 )
 async def test_register_validation_never_echoes_input(client, changes):

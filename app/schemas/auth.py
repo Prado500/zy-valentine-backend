@@ -19,7 +19,7 @@ class Login(Input):
 
 
 class Register(Login):
-    password: str = Field(min_length=12, max_length=128)
+    password: str = Field(min_length=4, max_length=10)
     name: str = Field(min_length=1, max_length=120)
 
     @field_validator("name")
