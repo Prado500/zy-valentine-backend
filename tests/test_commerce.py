@@ -25,8 +25,12 @@ LETTER = {
 
 
 async def create_letter(client, purchase, **changes):
+    # Estas pruebas ejercitan el contrato explícito borrador → editar → publicar, así
+    # que piden la carta sin auto-publicar. El despacho por defecto (publicar y enviar
+    # en el mismo acto) tiene sus propias pruebas en ``tests/test_sync_dispatch.py``.
     return await client.post(
-        "/api/v1/letters", json={**LETTER, "purchaseId": purchase["id"], **changes}
+        "/api/v1/letters",
+        json={**LETTER, "purchaseId": purchase["id"], "autoPublish": False, **changes},
     )
 
 

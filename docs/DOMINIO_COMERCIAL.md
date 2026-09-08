@@ -56,8 +56,8 @@ un reembolso posterior no borra la carta ya publicada.
 | #3 bis | `POST /api/v1/webhooks/mercadopago` | Firma HMAC obligatoria, idempotente, tolerante al desorden |
 | #4 carta | `POST /api/v1/letters` | Exige compra propia y `paid`; si ya existe devuelve la misma con 200 |
 | #5 antifraude | mismo endpoint | Bloqueo `FOR UPDATE` + UNIQUE: una compra pagada, una carta |
-| #6 persistencia | `PATCH /letters/{id}`, `POST /letters/{id}/photos` | Solo mientras la carta sea borrador |
-| #7 entrega | `POST /letters/{id}/publish` | Publica, genera slug y QR, y envía el correo dejando el estado en `letter_deliveries` |
+| #6 persistencia | `PATCH /letters/{id}`, `POST /letters/{id}/photos` | Solo mientras la carta sea borrador (`autoPublish=false`) |
+| #7 entrega | `POST /api/v1/letters` (por defecto) o `POST /letters/{id}/publish` | Publica, genera slug y QR, y envía el correo dejando el estado en `letter_deliveries`. Con `recipientEmail` y `autoPublish` (por defecto `true`) ocurre en el mismo acto de crear la carta, tanto en el camino síncrono como en el worker |
 
 ## 5. Contratos principales
 
@@ -79,12 +79,15 @@ de un navegador y se autentica por firma HMAC.
 { "purchase": { … }, "payment": { "status": "approved", "statusDetail": "accredited",
   "providerPaymentId": "1234567890", "verifiedAt": "…" }, "canCreateLetter": true }
 
-// POST /api/v1/letters               201 (nueva) | 200 (ya existía)
+// POST /api/v1/letters               201 (nueva) | 200 (ya existía) | 202 (encolada)
 { "purchaseId": "uuid", "title": "Para ti 💌", "recipientName": "Ana",
-  "recipientEmail": "ana@example.com", "body": "línea 1\nlínea 2 🌹", "theme": "classic" }
+  "recipientEmail": "ana@example.com", "body": "línea 1\nlínea 2 🌹", "theme": "classic",
+  "autoPublish": true }                 // opcional; con true (defecto) y recipientEmail,
+                                        // la respuesta ya trae publicUrl, qrUrl y deliveries[]
 
-// POST /api/v1/letters/{id}/photos   multipart: file, caption?, position?   201
+// POST /api/v1/letters/{id}/photos   multipart: file, caption?, position?   201  (solo borrador)
 // POST /api/v1/letters/{id}/publish  200  → publicUrl, qrUrl, publishedVersion, deliveries[]
+//                                         (para cartas creadas con autoPublish=false)
 // POST /api/v1/letters/{id}/deliveries  202  { "recipientEmail": "…"? }  ← reenvío
 
 // GET /api/v1/public/letters/{slug}   200 — sin usuario, sin correo del comprador, sin cédula

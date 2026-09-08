@@ -136,6 +136,12 @@ class EagerPhotoResponse(BaseModel):
 
 class LetterCreate(LetterInput):
     purchaseId: uuid.UUID
+    # Publicar y enviar el correo en el mismo acto (IOP #7). Es lo que espera el
+    # frontend, que no tiene pantalla de borradores: tras pagar, escribe la carta y
+    # espera el correo. Con False la carta queda en borrador para editarla y
+    # publicarla después con POST /letters/{id}/publish. Se aplica igual en el camino
+    # síncrono y en el de la cola: es el mismo campo que viaja en el sobre del worker.
+    autoPublish: bool = True
     # Fotos subidas en caliente antes de crear la carta. El worker las traslada al
     # contenedor permanente (IOP #6); aquí solo viajan sus referencias.
     temp_photos: list[TempPhotoRef] = Field(default_factory=list, max_length=20)

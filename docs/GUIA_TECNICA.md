@@ -560,8 +560,12 @@ POST /api/v1/auth/login     → 200 + cookie de sesión
 POST /api/v1/purchases      {idempotencyKey}          → 201 (repetir: 200, misma compra)
    … el usuario paga en el checkout de Mercado Pago …
 POST /api/v1/purchases/{id}/verify {paymentId}        → 200, purchase.status = "paid"
-POST /api/v1/letters        {purchaseId, title, …}    → 201 (repetir: 200, misma carta)
-POST /api/v1/letters/{id}/photos   (multipart)        → 201
+POST /api/v1/letters        {purchaseId, title, recipientEmail, temp_photos, …}
+                                                      → 201 publicada + publicUrl + qrUrl + correo
+                                                        enviado (repetir: 200, misma carta, sin
+                                                        segundo correo; con Service Bus: 202)
+   … flujo alternativo con {"autoPublish": false}: la carta queda en borrador …
+POST /api/v1/letters/{id}/photos   (multipart)        → 201 (solo borrador)
 POST /api/v1/letters/{id}/publish                     → 200 + publicUrl + qrUrl + correo enviado
 GET  /api/v1/public/letters/{slug}                    → visor público, sin sesión
 POST /api/v1/letters/{id}/deliveries                  → 202, reenvío sin consumir compra
