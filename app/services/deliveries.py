@@ -13,6 +13,7 @@ fotos no bloquee al worker mientras codifica megabytes.
 
 import logging
 from datetime import UTC, datetime
+from email.utils import make_msgid
 from functools import partial
 
 from anyio import to_thread
@@ -25,10 +26,31 @@ from app.models.commerce import Letter, LetterDelivery, LetterPhoto
 from app.repositories import commerce
 from app.services.letters import public_url
 from app.services.mailer import Attachment, Mailer, render_letter_document, render_letter_email
-from app.services.qr import qr_data_uri
+from app.services.qr import qr_data_uri, qr_png
 from app.services.storage import StorageBackend
 
 LOG = logging.getLogger("app.deliveries")
+
+# Dominio del Content-ID. Es un identificador opaco que ningún cliente resuelve, así que se
+# fija en vez de dejar que `make_msgid` llame a `socket.getfqdn()`: esa llamada hace una
+# consulta DNS inversa bloqueante dentro del bucle de eventos y, de paso, publicaría el
+# nombre del contenedor en cada correo. `.invalid` está reservado por el RFC 2606.
+CID_DOMAIN = "zy-valentine.invalid"
+
+
+def qr_part(url: str) -> tuple[str, Attachment]:
+    """QR del cuerpo del correo: devuelve (``src`` del ``<img>``, parte incrustada).
+
+    Un único sitio construye las dos mitades para que no puedan divergir: la cabecera
+    ``Content-ID`` lleva los ``<>`` y el ``src`` los lleva pelados, y un identificador que
+    no case deja la imagen rota otra vez. El ``data:`` URI se queda solo en el documento
+    adjunto, que se abre en un navegador.
+    """
+    cid = make_msgid(idstring="qr", domain=CID_DOMAIN)
+    part = Attachment(
+        filename="qr.png", content=qr_png(url), maintype="image", subtype="png", cid=cid
+    )
+    return f"cid:{cid[1:-1]}", part
 
 
 def document_name(letter: Letter) -> str:
@@ -118,15 +140,17 @@ async def deliver(
 
     photos = await commerce.photos_of_letter(db, letter.id)
     attachment = await build_document(settings, storage, letter, photos, url)
+    qr_src, qr_inline = qr_part(url)
     message = render_letter_email(
         to=address,
         recipient_name=letter.recipient_name,
         title=letter.title,
         public_url=url,
-        qr_source=qr_data_uri(url),
+        qr_source=qr_src,
         letter_id=str(letter.id),
         version=letter.published_version,
         attachments=(attachment,) if attachment else (),
+        inline=(qr_inline,),
     )
     delivery.attempts += 1
     try:

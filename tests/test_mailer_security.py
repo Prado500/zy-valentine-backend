@@ -17,6 +17,7 @@ import pytest
 from app.core.html import escape_attr, escape_text, safe_file_name, sanitize
 from app.services.mailer import (
     Attachment,
+    build_mime,
     media_type,
     render_letter_document,
     render_letter_email,
@@ -203,6 +204,59 @@ def test_the_plain_text_part_carries_no_control_characters():
     )
 
     assert "\x00" not in mail.text and "\x1b" not in mail.text
+
+
+def test_the_qr_travels_as_a_related_part_and_not_as_a_data_uri():
+    """Regresión: con ``data:`` el destinatario solo veía el texto alternativo.
+
+    Se audita el MIME que sale por el cable, no la plantilla: la imagen debe existir como
+    parte ``image/png`` con disposición ``inline``, su ``Content-ID`` debe coincidir con
+    el ``src`` del HTML y el adjunto normal debe seguir siendo un adjunto.
+    """
+    cid = "<20260909.qr@zy-valentine.invalid>"
+    mail = render_letter_email(
+        to="ana@example.com",
+        recipient_name="Ana",
+        title="Para ti",
+        public_url="https://frontend.example.com/carta/abc",
+        qr_source=f"cid:{cid[1:-1]}",
+        letter_id="8c1f",
+        version=1,
+        attachments=(Attachment(filename="carta.html", content=b"<p>x</p>"),),
+        inline=(
+            Attachment(
+                filename="qr.png",
+                content=b"\x89PNG",
+                maintype="image",
+                subtype="png",
+                cid=cid,
+            ),
+        ),
+    )
+
+    mime = build_mime("no-reply@example.com", mail)
+    types = [part.get_content_type() for part in mime.walk()]
+
+    assert "multipart/related" in types  # el HTML y su imagen viajan juntos
+    assert "text/plain" in types  # la alternativa en texto sigue ahí
+
+    image = next(part for part in mime.walk() if part.get_content_type() == "image/png")
+    assert image["Content-ID"] == cid
+    assert image.get_content_disposition() == "inline"
+
+    # El cuerpo es el text/html que NO es el documento adjunto (ambos son text/html).
+    body = next(
+        part
+        for part in mime.walk()
+        if part.get_content_type() == "text/html"
+        and part.get_content_disposition() != "attachment"
+    )
+    html = body.get_content()
+    assert f'src="cid:{cid[1:-1]}"' in html
+    assert "data:image/png;base64," not in html
+
+    document = next(part for part in mime.walk() if part.get_filename() == "carta.html")
+    assert document.get_content_disposition() == "attachment"
 
 
 # --- Utilidades de escape ------------------------------------------------------------------------

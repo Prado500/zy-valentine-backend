@@ -4,6 +4,13 @@ El correo lleva botón al visor público, código QR al mismo visor e identifica
 de carta y versión publicada. El estado del envío se persiste en
 ``letter_deliveries``; un reintento crea otro intento de envío, nunca otra carta.
 
+El QR viaja **incrustado por Content-ID** (``cid:``), no como ``data:`` URI. Gmail,
+Outlook y Yahoo descartan los ``data:`` dentro de ``<img src>``, así que el destinatario
+solo veía el texto alternativo. Como parte ``multipart/related`` la imagen se muestra sin
+pedir "mostrar imágenes" y sin depender de que la API sea alcanzable desde el cliente de
+correo. El documento adjunto sí conserva el ``data:``: se abre en un navegador y debe
+seguir funcionando sin red.
+
 Además del cuerpo, se adjunta un **documento HTML autónomo** con las fotos incrustadas
 en Base64 (``render_letter_document``). Es la copia que el destinatario conserva aunque
 el visor deje de estar disponible: no pide nada a la red al abrirse. Construirlo es
@@ -31,12 +38,19 @@ ALLOWED_IMAGE_TYPES = frozenset({"image/jpeg", "image/png", "image/webp"})
 @dataclass(frozen=True)
 class Attachment:
     """Adjunto de correo. ``filename`` viaja en una cabecera MIME, así que quien lo
-    construya debe pasarlo ya saneado con :func:`app.core.html.safe_file_name`."""
+    construya debe pasarlo ya saneado con :func:`app.core.html.safe_file_name`.
+
+    Con ``cid`` la parte deja de ser un adjunto y pasa a ser un recurso *relacionado*
+    (RFC 2392): viaja dentro del cuerpo y el HTML la referencia con ``src="cid:..."``.
+    El identificador se guarda con los ``<>`` que exige la cabecera ``Content-ID``; el
+    ``src`` del HTML los lleva pelados.
+    """
 
     filename: str
     content: bytes
     maintype: str = "text"
     subtype: str = "html"
+    cid: str | None = None
 
 
 @dataclass(frozen=True)
@@ -46,6 +60,9 @@ class Mail:
     html: str
     text: str
     attachments: tuple[Attachment, ...] = field(default=())
+    # Partes incrustadas en el HTML (hoy, el QR). Separadas de ``attachments`` a
+    # propósito: no deben aparecer como archivos en la bandeja de entrada.
+    inline: tuple[Attachment, ...] = field(default=())
 
 
 class Mailer:
@@ -64,25 +81,46 @@ class ConsoleMailer(Mailer):
         return f"console-{len(self.sent)}"
 
 
+def build_mime(sender: str, message: Mail) -> EmailMessage:
+    """Arma el MIME final: texto, HTML, partes incrustadas y adjuntos.
+
+    Vive fuera de :class:`SmtpMailer` para poder auditar la estructura del mensaje sin
+    abrir un socket SMTP: que el QR llegue como parte ``image/png`` con su ``Content-ID``
+    es justo lo que se rompió en producción.
+    """
+    email = EmailMessage()
+    email["From"] = sender
+    email["To"] = message.to
+    email["Subject"] = message.subject
+    email.set_content(message.text)
+    email.add_alternative(message.html, subtype="html")
+    # La parte HTML es la última del multipart/alternative. Se toma AQUÍ, antes de añadir
+    # ningún adjunto: `add_attachment` envuelve el mensaje en un multipart/mixed y el
+    # índice dejaría de apuntar al HTML.
+    html_part = email.get_payload()[-1]
+    for item in message.inline:
+        # Convierte esa parte en multipart/related y marca la imagen como `inline`;
+        # el `src="cid:..."` del cuerpo la encuentra ahí mismo.
+        html_part.add_related(
+            item.content, maintype=item.maintype, subtype=item.subtype, cid=item.cid
+        )
+    for item in message.attachments:
+        email.add_attachment(
+            item.content,
+            maintype=item.maintype,
+            subtype=item.subtype,
+            filename=item.filename,
+        )
+    return email
+
+
 class SmtpMailer(Mailer):
     def __init__(self, settings: Settings):
         self.settings = settings
 
     def _send(self, message: Mail) -> str:
         settings = self.settings
-        email = EmailMessage()
-        email["From"] = settings.sender_address
-        email["To"] = message.to
-        email["Subject"] = message.subject
-        email.set_content(message.text)
-        email.add_alternative(message.html, subtype="html")
-        for item in message.attachments:
-            email.add_attachment(
-                item.content,
-                maintype=item.maintype,
-                subtype=item.subtype,
-                filename=item.filename,
-            )
+        email = build_mime(settings.sender_address, message)
         context = ssl.create_default_context()
         with smtplib.SMTP(
             settings.mail_host, settings.mail_port, timeout=settings.mail_timeout
@@ -110,6 +148,7 @@ def render_letter_email(
     letter_id: str,
     version: int,
     attachments: tuple[Attachment, ...] = (),
+    inline: tuple[Attachment, ...] = (),
 ) -> Mail:
     safe_title = escape_text(title)
     safe_name = escape_text(recipient_name)
@@ -160,6 +199,7 @@ def render_letter_email(
         html=html,
         text=text,
         attachments=attachments,
+        inline=inline,
     )
 
 

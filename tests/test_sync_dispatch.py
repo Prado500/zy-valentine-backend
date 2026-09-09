@@ -267,7 +267,8 @@ async def test_letter_is_published_and_emailed_on_creation(client, paid_purchase
     sent = app.state.mailer.sent[-1]
     assert sent.to == LETTER["recipientEmail"]
     assert body["publicUrl"] in sent.html
-    assert "data:image/png;base64," in sent.html  # QR embebido
+    assert "data:image/png;base64," not in sent.html  # el QR va como parte relacionada
+    assert f'src="cid:{sent.inline[0].cid[1:-1]}"' in sent.html
     assert sent.attachments and sent.attachments[0].filename.endswith(".html")
     assert "recuerdo.png" in sent.attachments[0].content.decode()
 
