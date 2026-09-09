@@ -304,7 +304,12 @@ async def test_publish_sends_email_with_link_qr_and_version(client, paid_purchas
     message = app.state.mailer.sent[-1]
     assert message.to == "ana@example.com"
     assert body["publicUrl"] in message.html
-    assert "data:image/png;base64," in message.html  # QR embebido
+    # El QR ya no se incrusta como data: URI (Gmail y Outlook lo descartan): viaja
+    # como parte relacionada y el cuerpo solo lleva la referencia cid:.
+    assert "data:image/png;base64," not in message.html
+    qr = message.inline[0]
+    assert f'src="cid:{qr.cid[1:-1]}"' in message.html
+    assert (qr.maintype, qr.subtype) == ("image", "png")
     assert letter["id"] in message.html  # identificador de carta
     assert "versión publicada 1" in message.html
 

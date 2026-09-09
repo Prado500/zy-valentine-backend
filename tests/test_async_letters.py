@@ -187,7 +187,8 @@ async def test_worker_moves_photos_and_sends_the_document(client, paid_purchase,
     # IOP #7: correo con enlace y QR en el cuerpo, y la carta adjunta como HTML autónomo.
     sent = app.state.mailer.sent[-1]
     assert detail["publicUrl"] in sent.html
-    assert "data:image/png;base64," in sent.html
+    assert "data:image/png;base64," not in sent.html  # el QR va como parte relacionada
+    assert f'src="cid:{sent.inline[0].cid[1:-1]}"' in sent.html
     document = sent.attachments[0]
     assert document.filename.endswith(".html")
     text = document.content.decode()
