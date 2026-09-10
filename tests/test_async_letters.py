@@ -189,8 +189,9 @@ async def test_worker_moves_photos_and_sends_the_document(client, paid_purchase,
     assert detail["publicUrl"] in sent.html
     assert "data:image/png;base64," not in sent.html  # el QR va como parte relacionada
     assert f'src="cid:{sent.inline[0].cid[1:-1]}"' in sent.html
-    document = sent.attachments[0]
-    assert document.filename.endswith(".html")
+    document = next(item for item in sent.attachments if item.filename.endswith(".html"))
+    assert {item.filename for item in sent.attachments} >= {"qr.png"}  # y el QR suelto
+    assert any(item.subtype == "pdf" for item in sent.attachments)  # y la tarjeta
     text = document.content.decode()
     assert text.count("data:image/png;base64,") == 3  # dos fotos y el QR
     assert "recuerdo del viaje.png" in text

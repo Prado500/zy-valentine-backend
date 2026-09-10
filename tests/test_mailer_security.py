@@ -15,6 +15,7 @@ from html.parser import HTMLParser
 import pytest
 
 from app.core.html import escape_attr, escape_text, safe_file_name, sanitize
+from app.services.letter_body import DEFAULT_SENDER
 from app.services.mailer import (
     Attachment,
     build_mime,
@@ -22,6 +23,7 @@ from app.services.mailer import (
     render_letter_document,
     render_letter_email,
 )
+from app.services.themes import THEMES
 
 # Cargas típicas de XSS: cierre de etiqueta, atributo, protocolo y contexto de comentario.
 PAYLOADS = [
@@ -105,6 +107,9 @@ def test_sad_path_no_payload_survives_as_executable_markup(payload):
             recipient_name=payload,
             body=payload,
             photos=[(payload, "image/png", b"x")],
+            sender_name=payload,
+            song_url=payload,
+            theme=payload,
         )
     )
 
@@ -168,12 +173,19 @@ def test_the_email_body_is_as_strict_as_the_attachment(payload):
         qr_source="data:image/png;base64,AAAA",
         letter_id="8c1f",
         version=1,
-        attachments=(Attachment(filename="carta.html", content=b"<p>x</p>"),),
+        attachments=(
+            Attachment(filename="carta.html", content=b"<p>x</p>"),
+            Attachment(filename=payload, content=b"%PDF-", maintype="application", subtype="pdf"),
+        ),
+        sender_name=payload,
+        song_url=payload,
+        theme=payload,
     )
 
     report = audit(mail.html)
     assert not EXECUTABLE & set(report.tags)
     assert not report.handlers
+    assert not [url for url in report.urls if url.startswith("javascript:")]
 
 
 def test_the_subject_cannot_inject_email_headers():
@@ -222,7 +234,16 @@ def test_the_qr_travels_as_a_related_part_and_not_as_a_data_uri():
         qr_source=f"cid:{cid[1:-1]}",
         letter_id="8c1f",
         version=1,
-        attachments=(Attachment(filename="carta.html", content=b"<p>x</p>"),),
+        attachments=(
+            Attachment(filename="carta.html", content=b"<p>x</p>"),
+            Attachment(
+                filename="tarjeta-qr-carta.pdf",
+                content=b"%PDF-1.7",
+                maintype="application",
+                subtype="pdf",
+            ),
+            Attachment(filename="qr.png", content=b"\x89PNG", maintype="image", subtype="png"),
+        ),
         inline=(
             Attachment(
                 filename="qr.png",
@@ -240,9 +261,18 @@ def test_the_qr_travels_as_a_related_part_and_not_as_a_data_uri():
     assert "multipart/related" in types  # el HTML y su imagen viajan juntos
     assert "text/plain" in types  # la alternativa en texto sigue ahí
 
-    image = next(part for part in mime.walk() if part.get_content_type() == "image/png")
+    # Hay dos image/png: el del cuerpo (inline, con Content-ID) y el descargable
+    # (attachment). Se distinguen por la disposición, nunca por el orden.
+    pngs = [part for part in mime.walk() if part.get_content_type() == "image/png"]
+    image = next(part for part in pngs if part.get_content_disposition() == "inline")
     assert image["Content-ID"] == cid
-    assert image.get_content_disposition() == "inline"
+    download = next(part for part in pngs if part.get_content_disposition() == "attachment")
+    assert download.get_filename() == "qr.png" and download["Content-ID"] is None
+
+    card = next(part for part in mime.walk() if part.get_content_type() == "application/pdf")
+    assert card.get_content_disposition() == "attachment"
+    assert card.get_filename() == "tarjeta-qr-carta.pdf"
+    assert card.get_payload(decode=True) == b"%PDF-1.7"
 
     # El cuerpo es el text/html que NO es el documento adjunto (ambos son text/html).
     body = next(
@@ -257,6 +287,94 @@ def test_the_qr_travels_as_a_related_part_and_not_as_a_data_uri():
 
     document = next(part for part in mime.walk() if part.get_filename() == "carta.html")
     assert document.get_content_disposition() == "attachment"
+
+
+# --- Tema, titular, firma y canción ----------------------------------------------------------
+
+
+def email(**changes):
+    defaults = {
+        "to": "ana@example.com",
+        "recipient_name": "Ana",
+        "title": "Para ti",
+        "public_url": "https://frontend.example.com/carta/abc",
+        "qr_source": "cid:qr@zy-valentine.invalid",
+        "letter_id": "8c1f",
+        "version": 1,
+    }
+    return render_letter_email(**{**defaults, **changes})
+
+
+def test_the_email_is_painted_with_the_theme_and_signed_by_the_sender():
+    mail = email(theme="midnight", sender_name="Sebastián")
+
+    assert THEMES["midnight"].bg in mail.html and THEMES["midnight"].accent in mail.html
+    assert "Medianoche Azul" in mail.html
+    assert ">De</p>" in mail.html and "Sebastián" in mail.html and "con cariño para" in mail.html
+    assert mail.text.startswith("De Sebastián con cariño para Ana.")
+    assert mail.subject == "Tu carta para Ana: Para ti"
+
+
+def test_without_sender_the_headline_is_con_carino_para():
+    mail = email(sender_name=None)
+
+    assert "Con cariño para" in mail.html and ">De</p>" not in mail.html
+    assert DEFAULT_SENDER not in mail.html  # el titular no inventa una firma
+    assert mail.text.startswith("Con cariño para Ana.")
+
+
+def test_an_unknown_theme_paints_the_classic_palette():
+    assert THEMES["classic"].bg in email(theme="no-existe").html
+    assert THEMES["pastel-pink"].bg in email(theme="pastelPink").html
+
+
+def test_the_email_explains_only_the_attachments_it_carries():
+    with_all = email(
+        attachments=(
+            Attachment(filename="carta.html", content=b"x"),
+            Attachment(filename="tarjeta-qr-carta.pdf", content=b"x", maintype="application", subtype="pdf"),
+            Attachment(filename="qr.png", content=b"x", maintype="image", subtype="png"),
+        )
+    )
+    assert "tarjeta-qr-carta.pdf" in with_all.html and "qr.png" in with_all.html
+    assert "carta.html" in with_all.html
+    assert "Para imprimir y entregar" in with_all.html and "tarjeta-qr-carta.pdf" in with_all.text
+
+    without = email()
+    assert "Para imprimir y entregar" not in without.html
+    assert "archivo HTML" not in without.html
+    # Los consejos van siempre: no dependen de que el PDF haya salido bien.
+    assert "Para acompañar tu carta" in without.html and "Flores" in without.text
+
+
+@pytest.mark.parametrize(
+    ("url", "linked"),
+    [
+        ("https://youtu.be/dQw4w9WgXcQ", True),
+        ("https://www.youtube.com/watch?v=abc", True),
+        ("https://evil.example/x", False),
+        ("javascript:alert(1)", False),
+        (None, False),
+    ],
+)
+def test_the_song_is_linked_only_when_it_is_youtube(url, linked):
+    mail = email(song_url=url)
+    hrefs = audit(mail.html).urls
+
+    assert ("Escúchala con esta canción" in mail.html) is linked
+    assert (url is not None and url.lower() in hrefs) is linked
+    document_html = document(song_url=url)
+    assert ("Escuchar la canción" in document_html) is linked
+
+
+def test_the_document_signs_with_the_sender_or_the_viewer_fallback():
+    signed = document(sender_name="Sebastián", theme="emerald")
+    assert "De parte de" in signed and "Sebastián" in signed
+    assert THEMES["emerald"].card_bg in signed
+
+    anonymous = document(sender_name=None)
+    assert DEFAULT_SENDER in anonymous
+    assert audit(anonymous).tags.count("img") == 2  # la foto y el QR, como antes
 
 
 # --- Utilidades de escape ------------------------------------------------------------------------

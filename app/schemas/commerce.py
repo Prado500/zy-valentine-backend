@@ -206,6 +206,7 @@ class LetterResponse(BaseModel):
     publicSlug: str | None
     publicUrl: str | None
     qrUrl: str | None
+    cardUrl: str | None
     publishedVersion: int
     publishedAt: datetime | None
     frozen: bool

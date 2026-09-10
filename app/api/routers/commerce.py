@@ -10,7 +10,9 @@ cabeceras, el tipo de contenido de las respuestas binarias y las dependencias de
 sesión y CSRF.
 """
 
+import unicodedata
 import uuid
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, File, Form, Request, Response, UploadFile
 
@@ -42,9 +44,27 @@ public_router = APIRouter(prefix="/api/v1/public", tags=["Public"])
 webhook_router = APIRouter(prefix="/api/v1/webhooks", tags=["Webhooks"])
 
 
+def content_disposition(filename: str) -> str:
+    """``attachment`` con el nombre en ASCII y, aparte, en UTF-8 (RFC 6266 / 5987).
+
+    Las cabeceras viajan en Latin-1: un título con caracteres fuera de ese rango
+    rompería la respuesta entera. El nombre ya pasó por ``safe_file_name`` (sin comillas
+    ni saltos); aquí solo se reparte entre ``filename`` y ``filename*``.
+    """
+    ascii_name = (
+        unicodedata.normalize("NFKD", filename).encode("ascii", "ignore").decode() or "archivo"
+    )
+    return f"attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{quote(filename)}"
+
+
 def binary(content: BinaryContent) -> Response:
     """Respuesta de bytes. Es lo único que no puede ser un esquema Pydantic."""
-    return Response(content=content.content, media_type=content.media_type)
+    headers = {}
+    if content.filename:
+        headers["Content-Disposition"] = content_disposition(content.filename)
+    if content.cache_control:
+        headers["Cache-Control"] = content.cache_control
+    return Response(content=content.content, media_type=content.media_type, headers=headers)
 
 
 # --- Identidad privada ---------------------------------------------------------------
@@ -330,6 +350,16 @@ async def letter_qr(
     return binary(await service.letter_qr(user, letter_id))
 
 
+@router.get("/letters/{letter_id}/card.pdf")
+async def letter_card(
+    letter_id: uuid.UUID,
+    user: User = Depends(current_user),
+    service: CommerceService = Depends(commerce_service),
+):
+    """Tarjeta QR imprimible (PDF), la misma que viaja adjunta en el correo."""
+    return binary(await service.letter_card(user, letter_id))
+
+
 # --- Visor público (sin sesión, sin datos personales del comprador) ------------------
 
 
@@ -348,6 +378,11 @@ async def public_photo(
 @public_router.get("/letters/{slug}/qr.png")
 async def public_qr(slug: str, service: CommerceService = Depends(commerce_service)):
     return binary(await service.public_qr(slug))
+
+
+@public_router.get("/letters/{slug}/card.pdf")
+async def public_card(slug: str, service: CommerceService = Depends(commerce_service)):
+    return binary(await service.public_card(slug))
 
 
 @router.get("/health/commerce", response_model=CommerceHealth, include_in_schema=False)

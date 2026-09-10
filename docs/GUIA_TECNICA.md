@@ -484,6 +484,15 @@ Un fallo de correo **no rompe la carta ni la compra**: la carta queda publicada,
 enlace y su QR, y el usuario puede reenviar. El reenvío crea otra fila; nunca otra carta
 ni otra compra.
 
+Antes de enviar, `deliver` separa una sola vez el remitente y la canción del final de
+`body` (`app/services/letter_body.py`) y arma tres adjuntos opcionales: el documento HTML
+(`build_document`), la tarjeta QR en PDF (`build_card`, en un hilo y con
+`CapacityLimiter(1)`: `app/services/cards.py` subconjunta cuatro fuentes) y el `qr.png`
+suelto. Cada uno tiene su propio `try/except` con `LOG.warning`: lo que falla no va, y
+el correo sale igual con el enlace y el QR del cuerpo. El correo y el documento se
+pintan con la paleta del tema (`app/services/themes.py`) y llevan los consejos de
+`app/services/gift_tips.py`.
+
 ### 7.6 Puertos externos
 
 Los cuatro siguen el mismo patrón: una clase base con la interfaz, una implementación

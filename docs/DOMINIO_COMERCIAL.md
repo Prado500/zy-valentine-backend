@@ -150,16 +150,47 @@ dirección. Cada envío queda registrado con la `letterVersion` que entregó.
 posteriores: bastaría con poner la variable en `false` y cada republicación
 incrementaría la versión. Mientras tanto queda en 1.
 
-## 8. Correo y QR
+## 8. Correo, QR y tarjeta imprimible
 
-El correo lleva: botón al visor público, código QR **embebido como `data:` URI**
-apuntando al mismo visor (no depende de que el cliente cargue imágenes remotas), y el
-identificador de la carta con su versión publicada. El estado del envío se persiste; un
-fallo de SMTP deja la entrega en `failed` con el tipo de error, sin romper la carta ni
-la compra, y el reenvío crea un nuevo intento.
+El correo se pinta con la **paleta del tema** de la carta (`app/services/themes.py`, espejo
+de los ocho estilos del frontend; un slug desconocido cae en `classic`) y lleva:
 
-También hay QR como imagen: `GET /api/v1/letters/{id}/qr.png` (dueño) y
-`GET /api/v1/public/letters/{slug}/qr.png` (público).
+- Titular «De X con cariño para Y» (o «Con cariño para Y» si nadie firmó), el título y el
+  botón al visor público.
+- El código QR **incrustado por Content-ID** (`cid:`, parte `multipart/related`). No va
+  como `data:` URI: Gmail, Outlook y Yahoo lo descartan y el destinatario solo veía el
+  texto alternativo.
+- La sección «Para acompañar tu carta»: mensaje general, flores, algo dulce y un detalle
+  acordes al estilo (`app/services/gift_tips.py`, texto de negocio editable) y cómo
+  entregarla.
+- Tres adjuntos, en orden fijo: la carta como documento HTML autónomo (fotos en Base64,
+  firma y enlace a la canción), la **tarjeta QR imprimible en PDF** y el código suelto
+  como `qr.png`. Ninguno es imprescindible: si falla, se registra y el correo sale con
+  el enlace y el QR del cuerpo.
+
+**Remitente y canción.** `letters.body` no tiene columnas para ellos: el frontend los
+escribe como dos líneas al final del cuerpo (`De parte de: X`, `Canción: <url>`) y el
+backend las separa una sola vez con `parse_body` (`app/services/letter_body.py`), fiel al
+`parseBody` del front: solo en la última línea, de atrás hacia delante y una vez cada
+una. Sin firma no se usa el nombre de la cuenta: quien no firmó eligió no hacerlo. Solo
+se enlaza una canción de YouTube en `https`.
+
+**Tarjeta QR (PDF).** A5 vertical con el diseño del tema (`app/services/cards.py`, fpdf2):
+fondo, hoja, filo y trama del papel, filigranas, lacre con el motivo, «De X con cariño
+para Y» en Great Vibes, el título, el QR dibujado como vectores con los colores del tema
+(sobre blanco en los temas oscuros y con contraste ≥ 7, la misma regla que el front) y
+una segunda página de consejos. Las fuentes van vendorizadas en `app/assets/fonts` (OFL);
+lo que ninguna tiene (emojis) se filtra antes de dibujar. Se genera en un hilo, de uno
+en uno, y se puede apagar con `LETTER_CARD_ENABLED=false`.
+
+El estado del envío se persiste; un fallo de SMTP deja la entrega en `failed` con el
+tipo de error, sin romper la carta ni la compra, y el reenvío crea un nuevo intento.
+
+Descargas: `GET /api/v1/letters/{id}/qr.png` y `/card.pdf` (dueño) y
+`GET /api/v1/public/letters/{slug}/qr.png` y `/card.pdf` (público). Todas fuerzan la
+descarga con `Content-Disposition` (el `<a download>` del front no funciona entre
+orígenes) y las públicas se declaran cacheables un día: una carta publicada está
+congelada. La respuesta de la carta expone `cardUrl` junto a `qrUrl`.
 
 ## 9. "Mis cartas" y "Mis dedicatorias"
 

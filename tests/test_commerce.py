@@ -312,6 +312,35 @@ async def test_publish_sends_email_with_link_qr_and_version(client, paid_purchas
     assert (qr.maintype, qr.subtype) == ("image", "png")
     assert letter["id"] in message.html  # identificador de carta
     assert "versión publicada 1" in message.html
+    # Tres adjuntos, en orden fijo: la carta en HTML, la tarjeta QR en PDF y el QR suelto.
+    names = [item.filename for item in message.attachments]
+    assert names[0].endswith(".html") and names[1].endswith(".pdf") and names[2] == "qr.png"
+    assert message.attachments[1].content.startswith(b"%PDF-")
+    assert message.attachments[2].content[:8] == b"\x89PNG\r\n\x1a\n"
+    assert names[1] in message.html and "qr.png" in message.html
+    # Sin firma en el cuerpo, el titular no inventa remitente; los consejos van siempre.
+    assert message.text.startswith("Con cariño para Ana.")
+    assert "Para acompañar tu carta" in message.html and "Flores" in message.html
+
+
+async def test_publish_email_signs_with_the_sender_and_hides_the_metadata_lines(
+    client, paid_purchase, app
+):
+    """El remitente y la canción viajan al final del cuerpo (contrato del frontend)."""
+    body = "Hola, Ana.\n\nTe quiero.\n\nDe parte de: Sebastián\n\nCanción: https://youtu.be/abc"
+    letter = (await create_letter(client, paid_purchase, body=body, theme="emerald")).json()
+    assert (await publish(client, letter["id"])).status_code == 200
+
+    message = app.state.mailer.sent[-1]
+    assert message.text.startswith("De Sebastián con cariño para Ana.")
+    assert "Sebastián" in message.html and "con cariño para" in message.html
+    assert "https://youtu.be/abc" in message.html
+    assert "#f0fdf4" in message.html  # fondo de Jardín Esmeralda
+
+    document = message.attachments[0].content.decode()
+    assert "De parte de:" not in document and "Canción:" not in document  # no como párrafos
+    assert "Sebastián" in document and 'href="https://youtu.be/abc"' in document
+    assert "Te quiero." in document
 
 
 async def test_public_viewer_hides_buyer_data(client, paid_purchase, app):
@@ -346,17 +375,48 @@ async def test_public_viewer_hides_buyer_data(client, paid_purchase, app):
         qr = await anonymous.get(f"/api/v1/public/letters/{slug}/qr.png")
         assert qr.status_code == 200
         assert qr.content[:8] == b"\x89PNG\r\n\x1a\n"
+        # El botón "Descargar QR" del front usa <a download> sobre otro origen, que el
+        # navegador ignora: la descarga la fuerza el servidor.
+        assert qr.headers["content-disposition"].startswith(f'attachment; filename="qr-{slug}.png"')
+        assert qr.headers["cache-control"] == "public, max-age=86400"
+        card = await anonymous.get(f"/api/v1/public/letters/{slug}/card.pdf")
+        assert card.status_code == 200
+        assert card.headers["content-type"] == "application/pdf"
+        assert card.content.startswith(b"%PDF-")
+        assert card.headers["content-disposition"].startswith('attachment; filename="tarjeta-qr-')
+        assert card.headers["cache-control"] == "public, max-age=86400"
+        assert BUYER["email"] not in card.content.decode("latin-1")
 
 
 async def test_draft_has_no_public_page(client, paid_purchase, app):
     letter = (await create_letter(client, paid_purchase)).json()
     assert (await client.get(f"/api/v1/letters/{letter['id']}/qr.png")).status_code == 409
+    assert (await client.get(f"/api/v1/letters/{letter['id']}/card.pdf")).status_code == 409
+    assert letter["qrUrl"] is None and letter["cardUrl"] is None
     async with app.state.sessions() as db:
         slug = await db.scalar(select(Letter.public_slug))
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://testserver"
     ) as anonymous:
         assert (await anonymous.get(f"/api/v1/public/letters/{slug}")).status_code == 404
+        assert (await anonymous.get(f"/api/v1/public/letters/{slug}/card.pdf")).status_code == 404
+
+
+async def test_owner_downloads_the_card_the_payload_links(client, paid_purchase, app):
+    letter = (await create_letter(client, paid_purchase, title="Para ti: «hola» 💌")).json()
+    body = (await publish(client, letter["id"])).json()
+    assert body["cardUrl"].endswith(f"/api/v1/letters/{letter['id']}/card.pdf")
+
+    card = await client.get(f"/api/v1/letters/{letter['id']}/card.pdf")
+    assert card.status_code == 200
+    assert card.headers["content-type"] == "application/pdf"
+    assert card.content.startswith(b"%PDF-")
+    disposition = card.headers["content-disposition"]
+    assert disposition.startswith('attachment; filename="tarjeta-qr-Para ti hola.pdf"')
+    assert "filename*=UTF-8''" in disposition
+    assert card.headers["cache-control"] == "no-store"  # la ruta del dueño no se cachea
+    # Mismo nombre que el adjunto del correo.
+    assert app.state.mailer.sent[-1].attachments[1].filename == "tarjeta-qr-Para ti hola.pdf"
 
 
 async def test_published_letter_is_frozen(client, paid_purchase):
