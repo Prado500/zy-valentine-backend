@@ -21,8 +21,8 @@ GENERAL_MESSAGE = (
 
 # Cómo entregarla. Va después de los consejos del tema.
 HOW_TO_DELIVER = (
-    "Imprime la tarjeta adjunta, recórtala por el borde y ponla dentro del ramo o de la "
-    "caja: el código se escanea con la cámara del celular, sin ninguna aplicación.",
+    "Imprime el código, recórtalo y ponlo dentro del ramo o de la caja: se escanea con "
+    "la cámara del celular, sin ninguna aplicación.",
     "El enlace no caduca. Si prefieres enviarlo por mensaje, comparte la dirección de la "
     "carta o reenvía este correo.",
 )

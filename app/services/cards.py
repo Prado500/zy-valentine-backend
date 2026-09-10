@@ -1,9 +1,10 @@
 """Tarjeta QR imprimible: un PDF A5 con el diseño del tema de la carta.
 
 Es lo que el comprador imprime y pone dentro del ramo o de la caja: el código hacia
-la carta, "De X con cariño para Y", el título, y una segunda página con consejos
-para acompañarla. Sigue la tarjeta QR del frontend (``ThemeQRCode.tsx``): la misma
-paleta, las mismas fuentes y los mismos trazos, aquí dibujados con fpdf2.
+la carta, "De X con cariño para Y" y el título, en una sola página. Es el único sitio
+donde va la dedicatoria: el correo se dirige al comprador y no la repite. Sigue la
+tarjeta QR del frontend (``ThemeQRCode.tsx``): la misma paleta, las mismas fuentes y
+los mismos trazos, aquí dibujados con fpdf2.
 
 Decisiones:
 
@@ -30,7 +31,6 @@ from importlib.resources import files
 import segno
 
 from app.core.html import safe_file_name, sanitize
-from app.services.gift_tips import GENERAL_MESSAGE, HOW_TO_DELIVER, GiftTips, tips_for
 from app.services.themes import (
     Palette,
     corner_flourish_svg,
@@ -453,83 +453,6 @@ def _draw_card_page(canvas: _Canvas, content: CardContent, sender: str | None, r
     _draw_footer(canvas, content)
 
 
-# --- Página 2: para acompañar la carta -------------------------------------------------------
-
-
-def _draw_flowers_icon(canvas: _Canvas, cx: float, cy: float) -> None:
-    palette = canvas.palette
-    with canvas.pdf.local_context(fill_opacity=0.9):
-        canvas.fill(palette.accent)
-        for k in range(5):
-            angle = math.radians(k * 72 - 90)
-            canvas.dot(cx + 2.6 * math.cos(angle), cy + 2.6 * math.sin(angle), 1.8)
-    canvas.fill(palette.metal)
-    canvas.dot(cx, cy, 1.4)
-
-
-def _draw_sweets_icon(canvas: _Canvas, cx: float, cy: float) -> None:
-    palette = canvas.palette
-    canvas.fill(palette.accent)
-    canvas.rounded(cx - 3.4, cy - 3.4, 6.8, 6.8, 1.6, "F")
-    with canvas.pdf.local_context(stroke_opacity=0.85):
-        canvas.stroke(palette.metal, 0.55)
-        canvas.pdf.line(cx, cy - 3.4, cx, cy + 3.4)
-        canvas.pdf.line(cx - 3.4, cy, cx + 3.4, cy)
-    canvas.fill(palette.metal)
-    canvas.dot(cx, cy, 0.9)
-
-
-def _draw_touch_icon(canvas: _Canvas, cx: float, cy: float) -> None:
-    palette = canvas.palette
-    canvas.svg(motif_svg(palette.motif, 8, palette.accent), cx - 4, cy - 4, 8, 8)
-
-
-def _draw_tip_box(canvas: _Canvas, y: float, label: str, body: str, icon) -> None:
-    palette = canvas.palette
-    canvas.fill(palette.bg)
-    canvas.stroke(palette.border, 0.3)
-    canvas.rounded(22, y, 104, 26, 3, "DF")
-    icon(canvas, 31.0, y + 13.0)
-    canvas.font("playfair", 11)
-    canvas.ink(palette.accent)
-    canvas.text(label, 42, y + 3.5, 80, 6, align="L")
-    canvas.font("bevietnam", 9)
-    canvas.ink(palette.text)
-    _, lines = canvas.fit("bevietnam", body, 78, 9, 8, 3)
-    canvas.paragraph(lines, 42, y + 10.5, 78, 4.4, align="L")
-
-
-def _draw_tips_page(canvas: _Canvas, content: CardContent, tips: GiftTips, url: str) -> None:
-    palette = canvas.palette
-    canvas.pdf.add_page()
-    _draw_sheet(canvas)
-    _draw_ornament(canvas, 26.0)
-
-    canvas.font("playfair", 15)
-    canvas.ink(palette.text)
-    canvas.text("Para acompañar tu carta", TEXT_X, 33.0, TEXT_WIDTH, 8)
-
-    canvas.font("bevietnam", 9.5)
-    canvas.ink(palette.text)
-    _, lines = canvas.fit("bevietnam", GENERAL_MESSAGE, 104, 9.5, 8.5, 4)
-    canvas.paragraph(lines, 22, 43.0, 104, 4.8)
-
-    _draw_tip_box(canvas, 66.0, "Flores", tips.flowers, _draw_flowers_icon)
-    _draw_tip_box(canvas, 96.0, "Algo dulce", tips.sweets, _draw_sweets_icon)
-    _draw_tip_box(canvas, 126.0, "Un detalle", tips.touch, _draw_touch_icon)
-
-    y = 157.0
-    for tip in HOW_TO_DELIVER:
-        canvas.fill(palette.accent)
-        canvas.dot(24.5, y + 2.1, 0.7)
-        canvas.font("bevietnam", 8)
-        canvas.ink(canvas.muted)
-        _, lines = canvas.fit("bevietnam", tip, 98, 8, 7.5, 3)
-        y = canvas.paragraph(lines, 28, y, 98, 4.1, align="L") + 1.6
-
-    _draw_footer(canvas, content)
-
-
 # --- Punto de entrada -------------------------------------------------------------------------
 
 
@@ -538,7 +461,6 @@ def render_card_pdf(content: CardContent) -> bytes:
     from fpdf import FPDF  # noqa: PLC0415 - arrastra Pillow; no debe cargarse al arrancar
 
     palette = palette_for(content.theme)
-    tips = tips_for(content.theme)
     title = printable(content.title) or TITLE_FALLBACK
     recipient = printable(content.recipient_name) or RECIPIENT_FALLBACK
     sender = printable(content.sender_name or "") or None
@@ -558,5 +480,4 @@ def render_card_pdf(content: CardContent) -> bytes:
 
     canvas = _Canvas(pdf, palette)
     _draw_card_page(canvas, content, sender, recipient, title, url)
-    _draw_tips_page(canvas, content, tips, url)
     return bytes(pdf.output())

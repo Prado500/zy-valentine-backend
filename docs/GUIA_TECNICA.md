@@ -485,13 +485,14 @@ enlace y su QR, y el usuario puede reenviar. El reenvío crea otra fila; nunca o
 ni otra compra.
 
 Antes de enviar, `deliver` separa una sola vez el remitente y la canción del final de
-`body` (`app/services/letter_body.py`) y arma tres adjuntos opcionales: el documento HTML
-(`build_document`), la tarjeta QR en PDF (`build_card`, en un hilo y con
-`CapacityLimiter(1)`: `app/services/cards.py` subconjunta cuatro fuentes) y el `qr.png`
-suelto. Cada uno tiene su propio `try/except` con `LOG.warning`: lo que falla no va, y
-el correo sale igual con el enlace y el QR del cuerpo. El correo y el documento se
-pintan con la paleta del tema (`app/services/themes.py`) y llevan los consejos de
-`app/services/gift_tips.py`.
+`body` (`app/services/letter_body.py`) y arma el único adjunto, la tarjeta QR en PDF
+(`build_card`, en un hilo y con `CapacityLimiter(1)`: `app/services/cards.py`
+subconjunta cuatro fuentes), con su propio `try/except` y `LOG.warning`: si falla, el
+correo sale igual con el enlace y el QR del cuerpo. `qr_reference` decide cómo viaja ese
+QR: imagen remota al endpoint público si hay `API_PUBLIC_URL`, o parte incrustada por
+Content-ID. El correo se dirige al comprador, se pinta con la paleta del tema
+(`app/services/themes.py`) y lleva incrustados los consejos de
+`app/services/gift_tips.py`; la dedicatoria y la canción se quedan en el PDF y el visor.
 
 ### 7.6 Puertos externos
 
@@ -516,9 +517,9 @@ bloquear el bucle de eventos.
 en un hilo. `render_letter_email` genera el HTML; **todo lo que viene del usuario pasa
 por `html.escape`**, así que un título con `<script>` no se convierte en HTML.
 
-**`qr.py`** — `segno`, biblioteca en Python puro sin dependencias binarias (no arrastra
-Pillow). `qr_png` devuelve la imagen; `qr_data_uri` la embebe en base64 dentro del
-correo, para que el QR se vea aunque el cliente bloquee imágenes remotas.
+**`qr.py`** — `segno`, biblioteca en Python puro sin dependencias binarias. `qr_png`
+devuelve la imagen para los endpoints y la parte incrustada del correo; la tarjeta PDF
+dibuja el QR como vectores a partir de la matriz de `segno`.
 
 ---
 

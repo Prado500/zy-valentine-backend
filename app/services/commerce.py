@@ -259,7 +259,7 @@ class CommerceService:
         """IOP #7: publica, genera enlace y QR, y envía el correo con estado persistido."""
         letter = await self._owned_letter(user, letter_id)
         await letters.publish(self.db, self.settings, letter)
-        await deliveries.deliver(self.db, self.settings, self.mailer, letter, storage=self.storage)
+        await deliveries.deliver(self.db, self.settings, self.mailer, letter)
         return await self._letter_payload(letter)
 
     async def resend_letter(
@@ -268,9 +268,7 @@ class CommerceService:
         """Reenviar no consume otra compra ni crea otra carta: solo otro intento de envío."""
         letter = await self._owned_letter(user, letter_id)
         recipient = str(payload.recipientEmail) if payload.recipientEmail else None
-        delivery = await deliveries.deliver(
-            self.db, self.settings, self.mailer, letter, recipient, storage=self.storage
-        )
+        delivery = await deliveries.deliver(self.db, self.settings, self.mailer, letter, recipient)
         return self._delivery_schema(delivery)
 
     async def letter_qr(self, user: User, letter_id: uuid.UUID) -> BinaryContent:
@@ -451,7 +449,7 @@ class CommerceService:
             await letters.publish(self.db, self.settings, letter)
         if await self._already_delivered(letter):
             return
-        await deliveries.deliver(self.db, self.settings, self.mailer, letter, storage=self.storage)
+        await deliveries.deliver(self.db, self.settings, self.mailer, letter)
 
     async def _already_delivered(self, letter: Letter) -> bool:
         """Una reentrega no vuelve a enviar el correo de la misma versión publicada."""

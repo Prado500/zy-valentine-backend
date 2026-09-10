@@ -62,12 +62,12 @@ def glyph_warnings(caplog) -> list[str]:
 
 
 @pytest.mark.parametrize("slug", list(THEMES))
-def test_happy_path_every_theme_renders_two_pages_within_budget(slug, caplog):
+def test_happy_path_every_theme_renders_one_page_within_budget(slug, caplog):
     with caplog.at_level(logging.WARNING):
         pdf = render_card_pdf(content(theme=slug))
 
     assert pdf.startswith(b"%PDF-")
-    assert len(PAGE.findall(pdf)) == 2
+    assert len(PAGE.findall(pdf)) == 1
     assert len(pdf) < 400_000
     assert not glyph_warnings(caplog)
     assert not [r for r in caplog.records if r.name.startswith("fpdf.svg")]  # SVG entendido
@@ -101,7 +101,7 @@ def test_edge_long_texts_are_fitted_instead_of_overflowing(drawn):
         )
     )
 
-    assert len(PAGE.findall(pdf)) == 2
+    assert len(PAGE.findall(pdf)) == 1
     assert any(text.endswith("…") for text in drawn)  # algo se recortó con elipsis
 
 
