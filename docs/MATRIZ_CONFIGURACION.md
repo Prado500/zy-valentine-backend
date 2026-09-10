@@ -111,6 +111,8 @@ la rama `main` corresponde a `APP_ENV=production`, y no se infiere desde git.
 | `MAIL_HOST` / `MAIL_PORT` | `smtp.gmail.com` / 587 | igual | STARTTLS con verificación |
 | `MAIL_USERNAME` / `MAIL_PASSWORD` | vacíos | Secretos | Gmail exige contraseña de aplicación |
 | `MAIL_FROM` | vacío | Remitente visible | Si falta usa `MAIL_USERNAME` |
+| `LETTER_CARD_ENABLED` | `true` | `true` | Tarjeta QR en PDF adjunta al correo y rutas `card.pdf`; `false` la apaga en caliente si el render pesa en la B1ms |
+| `MAX_LETTER_CARD_BYTES` | 1 MB | 1 MB | Red de seguridad; una tarjeta ronda los 50 kB |
 | `FREEZE_LETTER_AFTER_PUBLISH` | `true` | `true` | Decisión documentada: el contenido se congela al publicar |
 | `JWT_SECRET_KEY`, `ALGORITHM`, `ACCESS_TOKEN_EXPIRE_MINUTES` | — | — | **Heredadas y no usadas**; no activan JWT |
 

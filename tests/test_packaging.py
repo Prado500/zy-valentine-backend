@@ -57,3 +57,25 @@ def test_la_imagen_instala_el_paquete_en_modo_editable():
         f"El Dockerfile instala sin `-e`: {instalaciones}. La imagen acabaría con dos "
         "copias de `app/` —la del COPY y la de site-packages— compitiendo por `import app`."
     )
+
+
+def test_las_fuentes_de_la_tarjeta_viajan_con_el_paquete():
+    """Los .ttf viven en ``app/assets/fonts`` y ``package-data`` los declara.
+
+    Con la instalación editable del contenedor bastaría con que existan, pero una
+    instalación normal los dejaría fuera y el PDF fallaría solo en producción.
+    """
+    from importlib.resources import files  # noqa: PLC0415
+
+    fonts = files("app.assets.fonts")
+    for name in (
+        "PlayfairDisplay-SemiBold.ttf",
+        "BeVietnamPro-Regular.ttf",
+        "BeVietnamPro-SemiBold.ttf",
+        "GreatVibes-Regular.ttf",
+    ):
+        assert fonts.joinpath(name).is_file(), f"falta la fuente {name}"
+        assert fonts.joinpath(name).read_bytes()[:4] == b"\x00\x01\x00\x00", f"{name} no es TTF"
+    pyproject = (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    assert "[tool.setuptools.package-data]" in pyproject
+    assert '"app.assets.fonts"' in pyproject

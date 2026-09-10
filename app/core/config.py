@@ -214,6 +214,11 @@ class Settings(BaseSettings):
     mail_from: str | None = None
     mail_timeout: int = Field(default=10, ge=1, le=60)
     mail_max_attempts: int = Field(default=3, ge=1, le=10)
+    # Tarjeta QR en PDF adjunta al correo. El interruptor permite apagarla en caliente
+    # si el render pesa demasiado en la B1ms; el tope es una red de seguridad (una
+    # tarjeta normal ronda los 50 kB).
+    letter_card_enabled: bool = True
+    max_letter_card_bytes: int = Field(default=1_000_000, ge=100_000, le=5_000_000)
 
     # --- Cola de eventos (Azure Service Bus) ------------------------------------------
     # Estrictamente opcionales: si faltan, `service_bus_enabled` es False y tanto la API

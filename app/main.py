@@ -58,7 +58,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         request.state.request_id = str(uuid.uuid4())
         response = await call_next(request)
         response.headers["X-Request-ID"] = request.state.request_id
-        response.headers["Cache-Control"] = "no-store"
+        # `no-store` por defecto: casi todo lleva sesión o datos personales. Las pocas
+        # rutas de contenido público y congelado (QR y tarjeta de una carta publicada)
+        # fijan su propia cabecera y aquí se respeta.
+        response.headers.setdefault("Cache-Control", "no-store")
         response.headers["X-Content-Type-Options"] = "nosniff"
         return response
 

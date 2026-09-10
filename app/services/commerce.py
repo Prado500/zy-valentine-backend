@@ -25,8 +25,10 @@ worker, que traduce el estado a "reintentar" o "a la dead-letter queue".
 
 import uuid
 from dataclasses import dataclass
+from functools import partial
 from typing import Any, NamedTuple
 
+from anyio import to_thread
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings
@@ -57,6 +59,8 @@ from app.schemas.commerce import (
     TempPhotoRef,
 )
 from app.services import dedications, deliveries, identity, letters, purchases, webhooks
+from app.services.cards import CardContent, card_name, render_card_pdf
+from app.services.letter_body import parse_body
 from app.services.mailer import Mailer
 from app.services.payments import PaymentGateway
 from app.services.qr import qr_png
@@ -76,10 +80,22 @@ class Outcome(NamedTuple):
 
 
 class BinaryContent(NamedTuple):
-    """Bytes servidos tal cual: una foto o un PNG de QR."""
+    """Bytes servidos tal cual: una foto, el PNG del QR o el PDF de la tarjeta.
+
+    Con ``filename`` la respuesta lleva ``Content-Disposition: attachment``: el botón
+    "Descargar" del frontend usa ``<a download>`` sobre otro origen, que el navegador
+    ignora, así que la descarga la tiene que forzar el servidor. ``cache_control`` va
+    en las rutas públicas de contenido congelado, que se regenera en cada petición.
+    """
 
     content: bytes
     media_type: str
+    filename: str | None = None
+    cache_control: str | None = None
+
+
+# Una carta publicada está congelada: su QR y su tarjeta son estables por versión.
+FROZEN_CACHE = "public, max-age=86400"
 
 
 @dataclass(frozen=True, slots=True)
@@ -262,7 +278,36 @@ class CommerceService:
         url = letters.public_url(self.settings, letter)
         if not url:
             raise ApiError(409, "LETTER_NOT_PUBLISHED", "Publica la carta para obtener su QR.")
-        return BinaryContent(qr_png(url), "image/png")
+        return BinaryContent(qr_png(url), "image/png", f"qr-{letter.public_slug}.png")
+
+    async def letter_card(self, user: User, letter_id: uuid.UUID) -> BinaryContent:
+        """Tarjeta QR en PDF de la carta propia (la misma que viaja en el correo)."""
+        letter = await self._owned_letter(user, letter_id)
+        url = letters.public_url(self.settings, letter)
+        if not url:
+            raise ApiError(
+                409, "LETTER_NOT_PUBLISHED", "Publica la carta para obtener su tarjeta."
+            )
+        return await self._card(letter, url)
+
+    async def _card(self, letter: Letter, url: str) -> BinaryContent:
+        if not self.settings.letter_card_enabled:
+            raise ApiError(503, "LETTER_CARD_DISABLED", "La tarjeta QR está desactivada.")
+        parsed = parse_body(letter.body)
+        content = CardContent(
+            title=letter.title,
+            recipient_name=letter.recipient_name,
+            sender_name=parsed.sender,
+            public_url=url,
+            theme=letter.theme,
+            letter_id=str(letter.id),
+            version=letter.published_version,
+        )
+        # Mismo hilo y mismo límite que la entrega por correo: un render a la vez.
+        pdf = await to_thread.run_sync(
+            partial(render_card_pdf, content), limiter=deliveries.card_limiter()
+        )
+        return BinaryContent(pdf, "application/pdf", card_name(letter))
 
     # --- Fotos -----------------------------------------------------------------------
 
@@ -338,7 +383,14 @@ class CommerceService:
 
     async def public_qr(self, slug: str) -> BinaryContent:
         letter = await self._published_letter(slug)
-        return BinaryContent(qr_png(letters.public_url(self.settings, letter)), "image/png")
+        url = letters.public_url(self.settings, letter)
+        return BinaryContent(qr_png(url), "image/png", f"qr-{letter.public_slug}.png", FROZEN_CACHE)
+
+    async def public_card(self, slug: str) -> BinaryContent:
+        """Tarjeta QR en PDF, sin sesión. Cuesta CPU: se declara cacheable."""
+        letter = await self._published_letter(slug)
+        content = await self._card(letter, letters.public_url(self.settings, letter))
+        return content._replace(cache_control=FROZEN_CACHE)
 
     def health(self) -> CommerceHealth:
         """Diagnóstico sin secretos: qué integraciones están configuradas."""
@@ -507,6 +559,7 @@ class CommerceService:
             publicSlug=letter.public_slug if letter.status == "published" else None,
             publicUrl=url,
             qrUrl=f"{base}/api/v1/letters/{letter.id}/qr.png" if url else None,
+            cardUrl=f"{base}/api/v1/letters/{letter.id}/card.pdf" if url else None,
             publishedVersion=letter.published_version,
             publishedAt=letter.published_at,
             frozen=letters.is_frozen(letter, self.settings),
