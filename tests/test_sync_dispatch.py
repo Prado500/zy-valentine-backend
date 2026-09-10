@@ -269,8 +269,8 @@ async def test_letter_is_published_and_emailed_on_creation(client, paid_purchase
     assert body["publicUrl"] in sent.html
     assert "data:image/png;base64," not in sent.html  # el QR va como parte relacionada
     assert f'src="cid:{sent.inline[0].cid[1:-1]}"' in sent.html
-    document = next(item for item in sent.attachments if item.filename.endswith(".html"))
-    assert "recuerdo.png" in document.content.decode()
+    assert [item.subtype for item in sent.attachments] == ["pdf"]  # solo la tarjeta
+    assert "recuerdo.png" in [photo["caption"] for photo in body["photos"]]
 
 
 # --- Camino triste: sin destinatario no hay nada que despachar -----------------------------

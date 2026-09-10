@@ -184,18 +184,13 @@ async def test_worker_moves_photos_and_sends_the_document(client, paid_purchase,
     with pytest.raises(ApiError):
         await app.state.storage.get(f"_temporal/{first['tempId']}")
 
-    # IOP #7: correo con enlace y QR en el cuerpo, y la carta adjunta como HTML autónomo.
+    # IOP #7: correo con enlace y QR en el cuerpo, y la tarjeta QR en PDF como único adjunto.
     sent = app.state.mailer.sent[-1]
     assert detail["publicUrl"] in sent.html
     assert "data:image/png;base64," not in sent.html  # el QR va como parte relacionada
     assert f'src="cid:{sent.inline[0].cid[1:-1]}"' in sent.html
-    document = next(item for item in sent.attachments if item.filename.endswith(".html"))
-    assert {item.filename for item in sent.attachments} >= {"qr.png"}  # y el QR suelto
-    assert any(item.subtype == "pdf" for item in sent.attachments)  # y la tarjeta
-    text = document.content.decode()
-    assert text.count("data:image/png;base64,") == 3  # dos fotos y el QR
-    assert "recuerdo del viaje.png" in text
-    assert "Segunda línea con emoji 🌹" in text
+    assert [item.subtype for item in sent.attachments] == ["pdf"]
+    assert any(photo.caption == "recuerdo del viaje.png" for photo in stored)
 
 
 async def test_redelivered_message_writes_and_sends_only_once(client, paid_purchase, queue, app):

@@ -28,9 +28,8 @@ async def test_a_broken_card_render_does_not_break_the_delivery(
 
     assert published.status_code == 200
     assert published.json()["deliveries"][0]["status"] == "sent"
-    names = attachment_names(app)
-    assert names[0].endswith(".html") and names[-1] == "qr.png"
-    assert not [name for name in names if name.endswith(".pdf")]
+    assert attachment_names(app) == []  # sin tarjeta no hay adjunto, pero el correo salió
+    assert "Tu tarjeta para imprimir" not in app.state.mailer.sent[-1].html  # no se promete
     assert any("tarjeta QR" in record.getMessage() for record in caplog.records)
     assert "RuntimeError" in caplog.text and "fuente corrupta" not in caplog.text  # solo el tipo
 

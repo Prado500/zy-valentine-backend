@@ -201,9 +201,6 @@ class Settings(BaseSettings):
     azure_temporal_container_name: str | None = None
     max_photo_bytes: int = Field(default=3_000_000, ge=1024, le=20_000_000)
     max_photos_per_letter: int = Field(default=6, ge=1, le=20)
-    # Tope del documento HTML adjunto al correo, ya en Base64. Por debajo de los 25 MB
-    # que rechazan casi todos los proveedores; las fotos que no caben se omiten.
-    max_letter_document_bytes: int = Field(default=24_000_000, ge=100_000, le=25_000_000)
 
     # --- Correo ---------------------------------------------------------------------
     mail_backend: Literal["console", "smtp"] = "console"
@@ -219,6 +216,11 @@ class Settings(BaseSettings):
     # tarjeta normal ronda los 50 kB).
     letter_card_enabled: bool = True
     max_letter_card_bytes: int = Field(default=1_000_000, ge=100_000, le=5_000_000)
+    # Origen público de esta API (https://api-….azurewebsites.net). Con él, el QR del
+    # correo se carga como imagen remota desde /api/v1/public/letters/{slug}/qr.png, que
+    # los clientes de correo muestran sin excepción; sin él viaja incrustado por
+    # Content-ID, que algunos clientes no pintan. Opcional, pero recomendado en producción.
+    api_public_url: str | None = None
 
     # --- Cola de eventos (Azure Service Bus) ------------------------------------------
     # Estrictamente opcionales: si faltan, `service_bus_enabled` es False y tanto la API
@@ -245,7 +247,7 @@ class Settings(BaseSettings):
     # --- Reglas de negocio -----------------------------------------------------------
     freeze_letter_after_publish: bool = True
 
-    @field_validator("cors_origins", "frontend_url", mode="before")
+    @field_validator("cors_origins", "frontend_url", "api_public_url", mode="before")
     @classmethod
     def normalize_origins(cls, value):
         """Tolera lo que se pega a mano en el portal: espacios, barra final y mayúsculas.
@@ -284,6 +286,8 @@ class Settings(BaseSettings):
             _validate_origin(origin, "CORS_ORIGINS")
         if self.frontend_url:
             _validate_origin(self.frontend_url, "FRONTEND_URL")
+        if self.api_public_url:
+            _validate_origin(self.api_public_url, "API_PUBLIC_URL")
         if self.secure_cookies:
             # Mensajes específicos: un fallo de arranque debe decir qué variable arreglar.
             if self.db_ssl_mode != "verify-full":

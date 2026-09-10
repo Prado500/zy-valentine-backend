@@ -312,35 +312,43 @@ async def test_publish_sends_email_with_link_qr_and_version(client, paid_purchas
     assert (qr.maintype, qr.subtype) == ("image", "png")
     assert letter["id"] in message.html  # identificador de carta
     assert "versión publicada 1" in message.html
-    # Tres adjuntos, en orden fijo: la carta en HTML, la tarjeta QR en PDF y el QR suelto.
+    # Un solo adjunto: la tarjeta QR en PDF. Ni la carta en HTML ni el QR suelto.
     names = [item.filename for item in message.attachments]
-    assert names[0].endswith(".html") and names[1].endswith(".pdf") and names[2] == "qr.png"
-    assert message.attachments[1].content.startswith(b"%PDF-")
-    assert message.attachments[2].content[:8] == b"\x89PNG\r\n\x1a\n"
-    assert names[1] in message.html and "qr.png" in message.html
-    # Sin firma en el cuerpo, el titular no inventa remitente; los consejos van siempre.
-    assert message.text.startswith("Con cariño para Ana.")
+    assert len(names) == 1 and names[0].endswith(".pdf")
+    assert message.attachments[0].content.startswith(b"%PDF-")
+    assert names[0] in message.html
+    # El correo es para el comprador: gracias, deseo y consejos incrustados.
+    assert message.text.startswith("¡Gracias por tu compra!")
+    assert "feliz día en pareja" in message.html
     assert "Para acompañar tu carta" in message.html and "Flores" in message.html
 
 
-async def test_publish_email_signs_with_the_sender_and_hides_the_metadata_lines(
-    client, paid_purchase, app
-):
-    """El remitente y la canción viajan al final del cuerpo (contrato del frontend)."""
+async def test_the_dedication_and_the_song_stay_out_of_the_email(client, paid_purchase, app):
+    """El remitente y la canción viajan al final del cuerpo (contrato del frontend), pero
+    el correo llega al comprador: la dedicatoria va solo en el PDF y la canción, en el visor."""
     body = "Hola, Ana.\n\nTe quiero.\n\nDe parte de: Sebastián\n\nCanción: https://youtu.be/abc"
     letter = (await create_letter(client, paid_purchase, body=body, theme="emerald")).json()
     assert (await publish(client, letter["id"])).status_code == 200
 
     message = app.state.mailer.sent[-1]
-    assert message.text.startswith("De Sebastián con cariño para Ana.")
-    assert "Sebastián" in message.html and "con cariño para" in message.html
-    assert "https://youtu.be/abc" in message.html
+    for absent in ("Sebastián", "con cariño para", "De parte de", "youtu.be", "Te quiero"):
+        assert absent not in message.html and absent not in message.text
     assert "#f0fdf4" in message.html  # fondo de Jardín Esmeralda
+    assert [item.subtype for item in message.attachments] == ["pdf"]
 
-    document = message.attachments[0].content.decode()
-    assert "De parte de:" not in document and "Canción:" not in document  # no como párrafos
-    assert "Sebastián" in document and 'href="https://youtu.be/abc"' in document
-    assert "Te quiero." in document
+
+async def test_with_a_public_api_origin_the_qr_is_a_remote_image(
+    client, paid_purchase, app, monkeypatch
+):
+    """La vía que todos los clientes de correo muestran: una URL https al QR público."""
+    monkeypatch.setattr(app.state.settings, "api_public_url", "https://api.example.com")
+    letter = (await create_letter(client, paid_purchase)).json()
+    body = (await publish(client, letter["id"])).json()
+
+    message = app.state.mailer.sent[-1]
+    expected = f"https://api.example.com/api/v1/public/letters/{body['publicSlug']}/qr.png"
+    assert f'src="{expected}"' in message.html
+    assert message.inline == ()  # sin parte incrustada que sobre
 
 
 async def test_public_viewer_hides_buyer_data(client, paid_purchase, app):
@@ -416,7 +424,7 @@ async def test_owner_downloads_the_card_the_payload_links(client, paid_purchase,
     assert "filename*=UTF-8''" in disposition
     assert card.headers["cache-control"] == "no-store"  # la ruta del dueño no se cachea
     # Mismo nombre que el adjunto del correo.
-    assert app.state.mailer.sent[-1].attachments[1].filename == "tarjeta-qr-Para ti hola.pdf"
+    assert app.state.mailer.sent[-1].attachments[0].filename == "tarjeta-qr-Para ti hola.pdf"
 
 
 async def test_published_letter_is_frozen(client, paid_purchase):
