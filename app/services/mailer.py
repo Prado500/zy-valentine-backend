@@ -7,12 +7,14 @@ La dedicatoria «De X con cariño para Y» y la canción **no** van en el correo
 la tarjeta PDF adjunta y en el visor. El estado del envío se persiste en
 ``letter_deliveries``; un reintento crea otro intento de envío, nunca otra carta.
 
-El QR del cuerpo llega de dos formas. Con ``API_PUBLIC_URL`` es una imagen remota
-(``/api/v1/public/letters/{slug}/qr.png``), que todos los clientes muestran. Sin ella
-viaja **incrustado por Content-ID** (``cid:``, parte ``multipart/related`` con
-``Content-Disposition: inline`` y nombre de archivo, que Outlook exige). Nunca como
-``data:`` URI: Gmail, Outlook y Yahoo lo descartan y el destinatario solo veía el texto
-alternativo.
+El código del cuerpo es la **baldosa estilizada** del tema —el mismo dibujo que la app
+enseña y que va en la postal—, no un cuadrado de módulos: trae su papel, su borde y el
+emblema alado ya pintados, así que el HTML no le añade marco. Llega de dos formas. Con
+``API_PUBLIC_URL`` es una imagen remota (``/api/v1/public/letters/{slug}/qr.png``), que
+todos los clientes muestran. Sin ella viaja **incrustada por Content-ID** (``cid:``,
+parte ``multipart/related`` con ``Content-Disposition: inline`` y nombre de archivo, que
+Outlook exige). Nunca como ``data:`` URI: Gmail, Outlook y Yahoo lo descartan y el
+destinatario solo veía el texto alternativo.
 
 El correo se pinta con la **paleta del tema** de la carta, la misma que el comprador vio
 en la previsualización.
@@ -281,9 +283,8 @@ def render_letter_email(
      text-decoration:none;padding:12px 26px;border-radius:999px">Ver la carta</a>
   </td></tr>
   <tr><td align="center" style="padding:20px 28px 0;text-align:center">
-    <img src="{escape_attr(qr_source)}" width="150" height="150" alt="Código QR hacia la carta"
-     style="display:block;margin:0 auto;border:1px solid {colors.border};border-radius:12px;
-     padding:6px;background-color:#ffffff" />
+    <img src="{escape_attr(qr_source)}" width="232" height="232" alt="Código QR hacia la carta"
+     style="display:block;margin:0 auto;border:0" />
     <p style="margin:10px 0 0;font-family:{SANS};font-size:12px;word-break:break-all">
       <a href="{safe_url}" style="color:{colors.accent}">{safe_url}</a>
     </p>

@@ -111,7 +111,7 @@ la rama `main` corresponde a `APP_ENV=production`, y no se infiere desde git.
 | `MAIL_HOST` / `MAIL_PORT` | `smtp.gmail.com` / 587 | igual | STARTTLS con verificación |
 | `MAIL_USERNAME` / `MAIL_PASSWORD` | vacíos | Secretos | Gmail exige contraseña de aplicación |
 | `MAIL_FROM` | vacío | Remitente visible | Si falta usa `MAIL_USERNAME` |
-| `LETTER_CARD_ENABLED` | `true` | `true` | Tarjeta QR en PDF adjunta al correo y rutas `card.pdf`; `false` la apaga en caliente si el render pesa en la B1ms |
+| `LETTER_CARD_ENABLED` | `true` | `true` | Tarjeta QR en PDF adjunta al correo y rutas `card.pdf` y `postal.png`; `false` las apaga en caliente si el dibujo pesa en la B1ms. El código del correo (`qr.png`) no depende de esta variable |
 | `MAX_LETTER_CARD_BYTES` | 1 MB | 1 MB | Red de seguridad; una tarjeta ronda los 50 kB |
 | `API_PUBLIC_URL` | vacío | `https://api-….azurewebsites.net` | Origen público de la API. Con él, el QR del correo es una imagen remota al endpoint público (la vía que todos los clientes muestran); sin él viaja incrustado por Content-ID |
 | `FREEZE_LETTER_AFTER_PUBLISH` | `true` | `true` | Decisión documentada: el contenido se congela al publicar |

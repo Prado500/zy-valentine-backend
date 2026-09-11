@@ -78,9 +78,9 @@ copias que se van separando con el tiempo.
 | `POST`/`DELETE /api/v1/letters/{id}/photos…` | Fotos ordenadas, validadas por firma binaria |
 | `POST /api/v1/letters/{id}/publish` | Publica, genera enlace y QR, y envía al comprador el correo con la tarjeta QR en PDF adjunta |
 | `POST /api/v1/letters/{id}/deliveries` | Reenvío; no consume otra compra |
-| `GET /api/v1/letters/{id}/qr.png`, `/card.pdf` | QR y tarjeta QR imprimible de la carta (dueño); descarga forzada |
+| `GET /api/v1/letters/{id}/qr.png`, `/postal.png`, `/card.pdf` | Código estilizado, postal en PNG y tarjeta imprimible de la carta (dueño); descarga forzada |
 | `GET /api/v1/public/letters/{slug}` | Visor público: sin usuario, sin correo, sin cédula |
-| `GET /api/v1/public/letters/{slug}/photos/{n}`, `/qr.png`, `/card.pdf` | Fotos, QR y tarjeta públicos (QR y tarjeta cacheables un día) |
+| `GET /api/v1/public/letters/{slug}/photos/{n}`, `/qr.png`, `/postal.png`, `/card.pdf` | Fotos, código, postal y tarjeta públicos (todo lo dibujado, cacheable un día) |
 | `GET /docs`, `GET /openapi.json` | Contrato generado por FastAPI |
 
 Reglas: un usuario puede tener muchas compras; **una compra pagada habilita exactamente
@@ -208,16 +208,17 @@ python worker.py     # sin cola configurada informa y termina con código 0
    con la paleta del tema que eligió: gracias por la compra, enlace y QR en el cuerpo,
    «Les deseamos un feliz día en pareja», consejos para acompañarla (flores, algo dulce
    y un detalle acordes al estilo, incrustados en el HTML) y un único adjunto: la
-   **tarjeta QR imprimible en PDF** (A5, una página, con el diseño del tema y la
-   dedicatoria «De X con cariño para Y»; `LETTER_CARD_ENABLED`, `MAX_LETTER_CARD_BYTES`).
-   La dedicatoria y la canción no van en el correo. El remitente y la canción viajan al
+   **tarjeta QR imprimible en PDF** (A5, una página, con la postal del tema centrada:
+   «P A R A» y el nombre, la primera frase de la carta, el código con el emblema alado y
+   «D E» con la firma; `LETTER_CARD_ENABLED`, `MAX_LETTER_CARD_BYTES`). La dedicatoria y
+   la canción no van en el correo. El remitente y la canción viajan al
    final de `body` (`De parte de:` / `Canción:`, contrato del frontend) y se separan una
-   sola vez con `app/services/letter_body.py`. El PDF se genera fuera del bucle de
-   eventos con `anyio.to_thread.run_sync` y de uno en uno (`CapacityLimiter(1)`), porque
-   subconjuntar fuentes es CPU pura en la B1ms; si falla, se anota y el correo sale
-   igual. El QR del cuerpo es una imagen remota al endpoint público cuando
-   `API_PUBLIC_URL` está definida (la vía que todos los clientes muestran) y, si no,
-   una parte incrustada por Content-ID.
+   sola vez con `app/services/letter_body.py`. La postal se dibuja fuera del bucle de
+   eventos con `anyio.to_thread.run_sync` y de una en una (`CapacityLimiter(1)`), porque
+   es CPU pura en la B1ms; si falla, se anota y el correo sale igual. El código del
+   cuerpo es una imagen remota al endpoint público cuando `API_PUBLIC_URL` está definida
+   (la vía que todos los clientes muestran) y, si no, una parte incrustada por
+   Content-ID.
 
 El contenedor efímero es `AZURE_TEMPORAL_CONTAINER_NAME` con `STORAGE_BACKEND=azure` y
 la carpeta `<LOCAL_STORAGE_DIR>/_temporal` con `STORAGE_BACKEND=local`: un desarrollador
@@ -267,13 +268,16 @@ fronteras y manejo de excepciones—, agrupados por archivo:
 | `test_mailer_security.py` | XSS en el correo, inyección de cabeceras, tema, QR inline o remoto en el MIME, sin dedicatoria ni canción |
 | `test_letter_body.py` | remitente y canción al final del cuerpo: orden, una sola vez, URL que no es YouTube |
 | `test_themes.py` | paletas del front, colores del QR con contraste ≥ 7, motivos SVG, consejos |
-| `test_cards.py` | tarjeta PDF: ocho temas, una página, emojis fuera de la fuente, textos largos, metadatos |
+| `test_cards.py` | la hoja A5: una página, la postal dentro, metadatos y nombre del archivo |
+| `test_postcard.py` | la postal: el código dibujado módulo a módulo, el excavado del emblema y un lector de verdad |
+| `test_vector.py` | los trazados del frontend aplanados: cajas, cerrados y abiertos |
+| `test_first_phrase.py` | la frase que se asoma en la postal: saludo, cierre y recorte |
 | `test_deliveries_resilience.py` | la tarjeta falla, se apaga o pesa de más y el correo sale igual (PostgreSQL) |
 | `test_storage.py` | rutas fuera de la raíz, traslado idempotente, backend de Azure |
 | `test_payments_lab.py` | proveedor de laboratorio y sus dos candados |
 
-Sin `TEST_DATABASE_URL` se ejecutan 295 pruebas y se omiten las de integración; con
-la base levantada son 424. **El pipeline levanta PostgreSQL como contenedor de
+Sin `TEST_DATABASE_URL` se ejecutan 383 pruebas y se omiten las de integración; con
+la base levantada son 512. **El pipeline levanta PostgreSQL como contenedor de
 servicio**, así que en el PR corren las 268.
 
 ## Coordinación con infraestructura

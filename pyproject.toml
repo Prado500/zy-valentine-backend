@@ -55,6 +55,7 @@ include = ["app*"]
 # editable dejaría el paquete sin los .ttf y el PDF fallaría solo en producción.
 [tool.setuptools.package-data]
 "app.assets.fonts" = ["*.ttf", "*.txt", "*.md"]
+"app.assets.flowers" = ["*.md", "tema */*.webp"]
 
 [tool.ruff]
 target-version = "py311"

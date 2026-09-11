@@ -1,25 +1,24 @@
-"""Tarjeta QR en PDF: los ocho temas, textos hostiles y el contrato del archivo.
+"""El PDF de la tarjeta: la postal del tema centrada en una hoja A5.
 
-No se rasteriza nada: se comprueba la estructura del PDF (páginas, metadatos,
-tamaño), que ningún glifo ausente llegue a la fuente y, espiando el lienzo, qué
-textos se dibujan. El aspecto se revisa a ojo con el script de humo del plan.
+El dibujo se prueba en ``test_postcard.py``. Aquí solo se comprueba el envoltorio: que
+la hoja lleva la postal, que cabe con margen para recortarla, que los metadatos van en
+español y que el archivo se llama de forma que no rompa una cabecera MIME.
 """
 
-import logging
 import re
 from types import SimpleNamespace
 
 import pytest
-import segno
 
-from app.services import cards
 from app.services.cards import (
+    CARD_WIDTH,
+    PAGE_HEIGHT,
+    PAGE_WIDTH,
     CardContent,
     card_name,
-    printable,
     render_card_pdf,
-    supported_codepoints,
 )
+from app.services.qr_card import metrics
 from app.services.themes import THEMES
 
 PAGE = re.compile(rb"/Type\s*/Page\b(?!s)")
@@ -31,6 +30,7 @@ def content(**changes) -> CardContent:
         "title": "Para ti",
         "recipient_name": "Ana",
         "sender_name": "Sebastián",
+        "note": "Eres mi lugar favorito.",
         "public_url": URL,
         "theme": "classic",
         "letter_id": "8c1f",
@@ -39,115 +39,39 @@ def content(**changes) -> CardContent:
     return CardContent(**{**defaults, **changes})
 
 
-@pytest.fixture
-def drawn(monkeypatch) -> list[str]:
-    """Textos que el lienzo dibuja, en orden. Espía casero: no depende de pytest-mock."""
-    texts: list[str] = []
-    original = cards._Canvas.text
-
-    def record(self, text, *args, **kwargs):
-        texts.append(text)
-        return original(self, text, *args, **kwargs)
-
-    monkeypatch.setattr(cards._Canvas, "text", record)
-    return texts
-
-
-def glyph_warnings(caplog) -> list[str]:
-    return [
-        record.getMessage()
-        for record in caplog.records
-        if record.name.startswith("fpdf") and "missing" in record.getMessage().lower()
-    ]
-
-
 @pytest.mark.parametrize("slug", list(THEMES))
-def test_happy_path_every_theme_renders_one_page_within_budget(slug, caplog):
-    with caplog.at_level(logging.WARNING):
-        pdf = render_card_pdf(content(theme=slug))
+def test_happy_path_every_theme_fits_on_one_page(slug):
+    pdf = render_card_pdf(content(theme=slug))
 
     assert pdf.startswith(b"%PDF-")
     assert len(PAGE.findall(pdf)) == 1
-    assert len(pdf) < 400_000
-    assert not glyph_warnings(caplog)
-    assert not [r for r in caplog.records if r.name.startswith("fpdf.svg")]  # SVG entendido
+    assert len(pdf) < 600_000
+    assert b"/Image" in pdf  # la postal va dentro, no se dibuja de nuevo
 
 
-def test_sad_path_emojis_and_controls_never_reach_the_font(caplog):
-    with caplog.at_level(logging.WARNING):
-        pdf = render_card_pdf(
-            content(
-                title="Para ti 💌🌹, mi amor\x00",
-                recipient_name="Ana 🥰",
-                sender_name="Seb‍astián ",
-            )
-        )
+def test_the_postcard_is_centred_with_room_to_cut_it_out():
+    """A 100 mm de ancho la postal son ~297 puntos por pulgada: calidad de imprenta."""
+    design = metrics()
+    height = CARD_WIDTH * design.height / design.width
 
-    assert pdf.startswith(b"%PDF-")
-    assert not glyph_warnings(caplog)
-    assert printable("Para ti 💌, mi amor") == "Para ti, mi amor"
-    assert printable("Seb‍astián") == "Sebastián"
-    assert printable("💌💌") == ""
-    assert printable("x" * 500, limit=10) == "x" * 10
+    assert height < PAGE_HEIGHT - 20  # queda margen arriba y abajo
+    assert CARD_WIDTH < PAGE_WIDTH - 40
+    assert round(design.width * 4 / (CARD_WIDTH / 25.4)) > 280  # puntos por pulgada
 
 
-def test_edge_long_texts_are_fitted_instead_of_overflowing(drawn):
-    pdf = render_card_pdf(
-        content(
-            title="Un título larguísimo " * 6,
-            recipient_name="Ana " * 30,
-            sender_name="Sebastián " * 30,
-            public_url=URL + "?utm=" + "y" * 120,
-        )
-    )
-
-    assert len(PAGE.findall(pdf)) == 1
-    assert any(text.endswith("…") for text in drawn)  # algo se recortó con elipsis
-
-
-def test_edge_without_sender_the_lockup_reads_con_carino_para(drawn):
-    render_card_pdf(content(sender_name=None))
-    assert "Con cariño para" in drawn and "De" not in drawn and "Sebastián" not in drawn
-
-    drawn.clear()
-    render_card_pdf(content(sender_name="Sebastián"))
-    assert "De" in drawn and "Sebastián" in drawn and "con cariño para" in drawn
-
-
-def test_edge_blank_names_use_the_fallback_copy(drawn):
-    render_card_pdf(content(title="💌", recipient_name="  ", sender_name="🌹"))
-
-    assert cards.TITLE_FALLBACK in drawn and cards.RECIPIENT_FALLBACK in drawn
-    assert "De" not in drawn  # una firma que era solo un emoji no es una firma
-
-
-def test_the_qr_encodes_the_public_url_with_the_expected_correction(monkeypatch):
-    calls: list[tuple] = []
-    original = segno.make
-
-    def record(*args, **kwargs):
-        calls.append((args, kwargs))
-        return original(*args, **kwargs)
-
-    monkeypatch.setattr(segno, "make", record)
-    render_card_pdf(content())
-
-    assert calls == [((URL,), {"error": "m"})]
-
-
-def test_the_pdf_carries_language_and_title_metadata():
+def test_the_pdf_carries_spanish_metadata():
     pdf = render_card_pdf(content(title="Feliz aniversario"))
 
     assert b"/Lang (es)" in pdf
     assert b"/Title" in pdf and b"/Subject" in pdf
 
 
-def test_exception_an_unknown_theme_falls_back_to_classic(caplog):
-    with caplog.at_level(logging.WARNING):
-        pdf = render_card_pdf(content(theme="no-existe"))
+def test_exception_emojis_in_the_title_do_not_break_the_metadata():
+    assert render_card_pdf(content(title="Para ti 💌🌹\x00")).startswith(b"%PDF-")
 
-    assert pdf.startswith(b"%PDF-")
-    assert not glyph_warnings(caplog)
+
+def test_an_unknown_theme_falls_back_to_classic():
+    assert len(PAGE.findall(render_card_pdf(content(theme="no-existe")))) == 1
 
 
 def test_card_name_is_safe_for_a_mime_header():
@@ -156,7 +80,3 @@ def test_card_name_is_safe_for_a_mime_header():
     assert name.startswith("tarjeta-qr-") and name.endswith(".pdf")
     assert not set('/\\"\r\n:') & set(name)
     assert card_name(SimpleNamespace(title="💌")) == "tarjeta-qr-carta.pdf"
-
-
-def test_the_bundled_fonts_cover_spanish():
-    assert all(ord(character) in supported_codepoints() for character in "áéíóúñÑ¿¡üÁÉ…·")

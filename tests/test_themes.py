@@ -4,15 +4,20 @@ import pytest
 
 from app.services.gift_tips import GENERAL_MESSAGE, HOW_TO_DELIVER, TIPS, tips_for
 from app.services.themes import (
+    EMBLEM_HIGHLIGHTS,
+    EMBLEM_MOTIF,
+    EMBLEM_RATIO,
+    EMBLEM_SCALE,
+    EMBLEM_WINGS,
     MIN_QR_CONTRAST,
     MOTIF_BOX,
-    MOTIF_PATHS,
+    MOTIF_SHAPES,
     THEMES,
     contrast_ratio,
-    corner_flourish_svg,
     darken_until_contrast,
+    metal_ink,
     mix,
-    motif_svg,
+    motif_transform,
     palette_for,
     qr_colors,
     relative_luminance,
@@ -40,7 +45,7 @@ def test_the_catalog_matches_the_frontend_presets():
     assert THEMES["emerald"].accent == "#16a34a"
     assert [slug for slug in SLUGS if THEMES[slug].dark] == ["starry", "midnight"]
     for palette in THEMES.values():
-        assert palette.motif in MOTIF_PATHS and palette.motif in MOTIF_BOX
+        assert palette.motif in MOTIF_SHAPES and palette.motif in MOTIF_BOX
         assert palette.texture in {"dots", "weave", "stardust", "diagonal", "grid", "ruled"}
         assert palette.edge in {"double", "dashed", "plain"}
 
@@ -83,20 +88,50 @@ def test_color_math_matches_the_frontend_helpers():
     assert text_on("#a20513") == "#ffffff"
 
 
-@pytest.mark.parametrize("motif", list(MOTIF_PATHS))
-def test_motif_svg_is_self_contained_for_fpdf2(motif):
-    svg = motif_svg(motif, 24, "#D4AF37")
+@pytest.mark.parametrize("motif", list(MOTIF_SHAPES))
+def test_every_motif_declares_what_is_filled_and_what_is_stroked(motif):
+    """El pintor necesita saberlo: un trazo relleno sale como un borrón."""
+    shapes = MOTIF_SHAPES[motif]
 
-    assert svg.startswith('<svg xmlns="http://www.w3.org/2000/svg"')
-    assert "currentColor" not in svg  # fpdf2 no lo resuelve
-    assert "#D4AF37" in svg
-    assert 'fill="none"' in svg if motif == "leaf" else 'fill="#D4AF37"' in svg
+    assert shapes
+    for shape in shapes:
+        assert bool(shape.path) != bool(shape.circle)  # o trazado o círculo, nunca ambos
+        assert shape.width >= 0
+    # Solo la hoja y los rayos del sol se trazan; el resto se rellenan.
+    stroked = [shape for shape in shapes if shape.width]
+    assert bool(stroked) is (motif in {"leaf", "sun"})
 
 
-def test_corner_flourish_rotates_into_each_corner():
-    assert "rotate(" not in corner_flourish_svg("#D4AF37", 16, "tl")
-    assert 'transform="rotate(180 32 32)"' in corner_flourish_svg("#D4AF37", 16, "br")
-    assert "currentColor" not in corner_flourish_svg("#D4AF37", 16, "bl")
+def test_motif_transform_centers_the_motif_where_it_is_asked():
+    """Coloca el motivo dentro del emblema: si se descuadra, el código queda torcido."""
+    size, cx, cy = EMBLEM_MOTIF
+    for motif, (left, top, box) in MOTIF_BOX.items():
+        scale, dx, dy = motif_transform(motif, size, cx, cy)
+
+        assert scale == size / box
+        # La caja del motivo, ya colocada, queda centrada en (cx, cy).
+        assert round(left * scale + dx + size / 2, 6) == cx
+        assert round(top * scale + dy + size / 2, 6) == cy
+
+
+def test_the_winged_emblem_is_small_enough_for_the_error_correction():
+    """Tapa módulos del código: con el nivel H se puede perder hasta un 30 % del área."""
+    area = EMBLEM_SCALE * (EMBLEM_SCALE * EMBLEM_RATIO)
+
+    assert area < 0.10
+    assert len(EMBLEM_WINGS) == 2 and len(EMBLEM_HIGHLIGHTS) == 2
+
+
+@pytest.mark.parametrize("slug", SLUGS)
+def test_the_names_are_legible_over_the_paper(slug):
+    """El metal puro da ~2:1 sobre un papel claro y los nombres se perdían."""
+    palette = THEMES[slug]
+    ink = metal_ink(palette)
+
+    if palette.dark:
+        assert ink == palette.metal  # el papel ya es oscuro
+    else:
+        assert contrast_ratio(ink, palette.card_bg) >= 3
 
 
 @pytest.mark.parametrize("slug", SLUGS)
