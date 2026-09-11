@@ -13,6 +13,7 @@ se devuelve el token opaco que el router guardará donde corresponda.
 from dataclasses import dataclass
 
 from anyio import CapacityLimiter, to_thread
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings
@@ -21,7 +22,7 @@ from app.core.security import digest
 from app.models.user import User
 from app.repositories import users
 from app.schemas.auth import GoogleLogin, Login, Register
-from app.services import auth
+from app.services import auth, consents, identity
 from app.services.google import GoogleVerifier
 
 # Tope defensivo para la cookie de sesión: el token que emitimos son 43 caracteres
@@ -38,8 +39,32 @@ class AccountService:
     google_limiter: CapacityLimiter
     google_verifier: GoogleVerifier
 
-    async def register(self, payload: Register) -> User:
-        return await auth.register(self.db, payload, self.hash_limiter)
+    async def register(
+        self, payload: Register, ip: str | None = None, user_agent: str | None = None
+    ) -> User:
+        """Usuario, documento y consentimiento en una sola transacción.
+
+        Si esto se partiera en dos commits podría quedar una cuenta sin consentimiento,
+        que no es un fallo parcial aceptable: es un incumplimiento de la Ley 1581.
+
+        **Orden deliberado:** el correo se comprueba primero, dentro de ``auth.register``.
+        Así un correo repetido sigue devolviendo ``EMAIL_IN_USE``, que es lo que el
+        frontend usa para mandar a la persona a iniciar sesión. Si el conflicto fuera del
+        documento, el código es ``REGISTRATION_CONFLICT`` y el frontend no intenta entrar.
+        """
+        user = await auth.register(self.db, payload, self.hash_limiter)
+        await identity.attach_document(
+            self.db, self.settings, user, payload.documentType, payload.documentNumber
+        )
+        consents.attach_consent(self.db, user, payload.acceptedTermsVersion, ip, user_agent)
+        try:
+            await self.db.commit()
+        except IntegrityError:
+            await self.db.rollback()
+            raise ApiError(409, "REGISTRATION_CONFLICT", identity.CONFLICT_MESSAGE) from None
+        # Tras el commit: ``created_at`` lo pone el servidor y la respuesta lo lleva.
+        await self.db.refresh(user)
+        return user
 
     async def login(self, payload: Login) -> User:
         return await auth.login(self.db, payload, self.hash_limiter)
