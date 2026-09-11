@@ -1,3 +1,4 @@
+import hashlib
 from functools import lru_cache
 from typing import Literal
 from urllib.parse import urlsplit
@@ -180,6 +181,10 @@ class Settings(BaseSettings):
     # Clave dedicada para el HMAC de la cédula. La cédula nunca es credencial ni
     # identificador público; solo se guarda su HMAC y los últimos dígitos.
     pii_hmac_key: SecretStr | None = None
+    # Clave AES-256-GCM del número de documento: el sobre reversible que permite
+    # facturar ante la DIAN. Si falta se deriva de SESSION_SECRET; fijarla evita que
+    # rotar el secreto de sesión deje ilegibles los números ya cifrados.
+    pii_encryption_key: SecretStr | None = None
 
     # --- Compras y pagos ----------------------------------------------------------
     # "fake" es un proveedor de laboratorio que aprueba cualquier pago. El validador
@@ -379,6 +384,17 @@ class Settings(BaseSettings):
         """Clave del HMAC de cédula; deriva del secreto de sesión si no se define."""
         secret = self.pii_hmac_key or self.session_secret
         return secret.get_secret_value().encode()
+
+    @property
+    def pii_cipher_key(self) -> bytes:
+        """Clave AES-256 del número de documento.
+
+        Si no se define ``PII_ENCRYPTION_KEY`` se deriva del secreto de sesión, igual
+        que hace ``pii_key``. **Ojo:** rotar ``SESSION_SECRET`` sin haber fijado antes
+        ``PII_ENCRYPTION_KEY`` deja ilegibles los números ya cifrados.
+        """
+        secret = self.pii_encryption_key or self.session_secret
+        return hashlib.sha256(b"zy-pii-aes-v1:" + secret.get_secret_value().encode()).digest()
 
     @property
     def sender_address(self) -> str:
