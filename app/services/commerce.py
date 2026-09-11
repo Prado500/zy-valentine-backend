@@ -430,12 +430,22 @@ class CommerceService:
         return content._replace(cache_control=FROZEN_CACHE)
 
     def health(self) -> CommerceHealth:
-        """Diagnóstico sin secretos: qué integraciones están configuradas."""
+        """Diagnóstico sin secretos: qué integraciones están **activas**.
+
+        Activas, no configuradas. La diferencia importa en la cola: una cadena
+        inválida deja las variables puestas y el publicador degradado, y decir
+        entonces "service-bus" certificaría salud sobre un sistema que escribe de
+        forma síncrona.
+        """
         return CommerceHealth(
             paymentProvider=self.settings.payment_provider,
             storageBackend=self.settings.storage_backend,
             mailBackend=self.settings.mail_backend,
-            letterQueue="service-bus" if self.settings.service_bus_enabled else "sync",
+            # `self.queue.enabled` y no `settings.service_bus_enabled`: las variables
+            # pueden estar puestas y aun así haber degradado a `MockPublisher` por una
+            # cadena inválida o por falta del paquete. El diagnóstico refleja lo que la
+            # aplicación **hace**, no lo que se le pidió que hiciera.
+            letterQueue="service-bus" if self.queue.enabled else "sync",
             freezeAfterPublish=self.settings.freeze_letter_after_publish,
         )
 
