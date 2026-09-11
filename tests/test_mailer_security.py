@@ -84,7 +84,9 @@ def card(name="tarjeta-qr-carta.pdf") -> Attachment:
 
 
 def qr_inline() -> Attachment:
-    return Attachment(filename="qr.png", content=b"\x89PNG", maintype="image", subtype="png", cid=CID)
+    return Attachment(
+        filename="qr.png", content=b"\x89PNG", maintype="image", subtype="png", cid=CID
+    )
 
 
 # --- Seguridad ----------------------------------------------------------------------------------
@@ -142,8 +144,7 @@ def test_the_qr_travels_as_a_related_inline_part_with_a_filename():
     body = next(
         part
         for part in mime.walk()
-        if part.get_content_type() == "text/html"
-        and part.get_content_disposition() != "attachment"
+        if part.get_content_type() == "text/html" and part.get_content_disposition() != "attachment"
     )
     html = body.get_content()
     assert f'src="cid:{CID[1:-1]}"' in html

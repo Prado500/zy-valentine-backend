@@ -13,6 +13,7 @@ from starlette.exceptions import HTTPException
 from app.api.routers.auth import router
 from app.api.routers.commerce import public_router, webhook_router
 from app.api.routers.commerce import router as commerce_router
+from app.api.routers.legal import router as legal_router
 from app.core.config import Settings, get_settings
 from app.core.security import RateLimiter
 from app.db.database import create_engine, session_factory
@@ -22,7 +23,7 @@ from app.services.payments import build_gateway
 from app.services.service_bus import build_publisher
 from app.services.storage import build_storage
 
-EXPECTED_REVISION = "0002_commerce"
+EXPECTED_REVISION = "0003_dian_and_consent"
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -123,6 +124,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(router)
     app.include_router(commerce_router)
     app.include_router(public_router)
+    app.include_router(legal_router)
     app.include_router(webhook_router)
     app.add_middleware(
         CORSMiddleware,

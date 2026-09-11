@@ -334,7 +334,10 @@ async def test_endpoint_shows_a_draft_letter_and_nothing_of_other_accounts(
         transport=httpx.ASGITransport(app=app), base_url="http://testserver"
     ) as other:
         other.headers["X-CSRF-Token"] = (await other.get("/api/v1/auth/csrf")).json()["csrfToken"]
-        await other.post("/api/v1/auth/register", json={**BUYER, "email": "otra@example.com"})
+        await other.post(
+            "/api/v1/auth/register",
+            json={**BUYER, "email": "otra@example.com", "documentNumber": "1055500003"},
+        )
         await other.post(
             "/api/v1/auth/login", json={"email": "otra@example.com", "password": BUYER["password"]}
         )

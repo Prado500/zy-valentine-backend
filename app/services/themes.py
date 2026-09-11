@@ -47,22 +47,110 @@ def _theme(slug, name, bg, card_bg, text, accent, border, metal, motif, texture,
 THEMES: dict[str, Palette] = {
     palette.slug: palette
     for palette in (
-        _theme("classic", "Romántico Clásico", "#fef8fa", "#ffffff", "#1d1b1d", "#a20513",
-               "#e4beba", "#D4AF37", "heart", "dots", "double"),
-        _theme("pastel-pink", "Rosado Pastel", "#fff5f7", "#ffe4e6", "#881337", "#e11d48",
-               "#fecdd3", "#E0A899", "petals", "weave", "dashed"),
-        _theme("starry", "Noche Estrellada", "#0f172a", "#1e293b", "#f8fafc", "#fbbf24",
-               "#334155", "#C7CBD4", "star", "stardust", "double"),
-        _theme("sunset", "Atardecer Cálido", "#fff7ed", "#ffedd5", "#431407", "#ea580c",
-               "#fed7aa", "#C98A4B", "sun", "diagonal", "plain"),
-        _theme("lavender", "Sueño de Lavanda", "#f5f3ff", "#ede9fe", "#4c1d95", "#7c3aed",
-               "#ddd6fe", "#B9A7D6", "sparkle", "stardust", "dashed"),
-        _theme("emerald", "Jardín Esmeralda", "#f0fdf4", "#dcfce7", "#14532d", "#16a34a",
-               "#bbf7d0", "#9BAE7F", "leaf", "grid", "double"),
-        _theme("midnight", "Medianoche Azul", "#090d16", "#111827", "#f3f4f6", "#38bdf8",
-               "#1f2937", "#9FB2C4", "moon", "stardust", "plain"),
-        _theme("vintage", "Carta Vintage", "#faf5ef", "#f5ebe0", "#4a3b32", "#b45309",
-               "#e6d5c3", "#B08653", "butterfly", "ruled", "double"),
+        _theme(
+            "classic",
+            "Romántico Clásico",
+            "#fef8fa",
+            "#ffffff",
+            "#1d1b1d",
+            "#a20513",
+            "#e4beba",
+            "#D4AF37",
+            "heart",
+            "dots",
+            "double",
+        ),
+        _theme(
+            "pastel-pink",
+            "Rosado Pastel",
+            "#fff5f7",
+            "#ffe4e6",
+            "#881337",
+            "#e11d48",
+            "#fecdd3",
+            "#E0A899",
+            "petals",
+            "weave",
+            "dashed",
+        ),
+        _theme(
+            "starry",
+            "Noche Estrellada",
+            "#0f172a",
+            "#1e293b",
+            "#f8fafc",
+            "#fbbf24",
+            "#334155",
+            "#C7CBD4",
+            "star",
+            "stardust",
+            "double",
+        ),
+        _theme(
+            "sunset",
+            "Atardecer Cálido",
+            "#fff7ed",
+            "#ffedd5",
+            "#431407",
+            "#ea580c",
+            "#fed7aa",
+            "#C98A4B",
+            "sun",
+            "diagonal",
+            "plain",
+        ),
+        _theme(
+            "lavender",
+            "Sueño de Lavanda",
+            "#f5f3ff",
+            "#ede9fe",
+            "#4c1d95",
+            "#7c3aed",
+            "#ddd6fe",
+            "#B9A7D6",
+            "sparkle",
+            "stardust",
+            "dashed",
+        ),
+        _theme(
+            "emerald",
+            "Jardín Esmeralda",
+            "#f0fdf4",
+            "#dcfce7",
+            "#14532d",
+            "#16a34a",
+            "#bbf7d0",
+            "#9BAE7F",
+            "leaf",
+            "grid",
+            "double",
+        ),
+        _theme(
+            "midnight",
+            "Medianoche Azul",
+            "#090d16",
+            "#111827",
+            "#f3f4f6",
+            "#38bdf8",
+            "#1f2937",
+            "#9FB2C4",
+            "moon",
+            "stardust",
+            "plain",
+        ),
+        _theme(
+            "vintage",
+            "Carta Vintage",
+            "#faf5ef",
+            "#f5ebe0",
+            "#4a3b32",
+            "#b45309",
+            "#e6d5c3",
+            "#B08653",
+            "butterfly",
+            "ruled",
+            "double",
+        ),
     )
 }
 
@@ -143,7 +231,11 @@ def mix(value: str, other: str, amount: float) -> str:
 
 def text_on(background: str) -> str:
     """Blanco o casi negro, el que mejor se lea sobre ``background`` (botones)."""
-    return "#ffffff" if contrast_ratio("#ffffff", background) >= contrast_ratio("#111111", background) else "#111111"
+    return (
+        "#ffffff"
+        if contrast_ratio("#ffffff", background) >= contrast_ratio("#111111", background)
+        else "#111111"
+    )
 
 
 def qr_colors(palette: Palette) -> tuple[str, str]:
@@ -179,10 +271,14 @@ class Shape:
 
 MOTIF_SHAPES: dict[str, tuple[Shape, ...]] = {
     "heart": (
-        Shape("M24 41C13.2 33.4 8 28.7 8 22.4 8 17.2 12.1 13 17.2 13c2.9 0 5.6 1.4 7.3 3.6C26.2 14.4 28.9 13 31.8 13 36.9 13 41 17.2 41 22.4 41 28.7 35.8 33.4 24 41Z"),
+        Shape(
+            "M24 41C13.2 33.4 8 28.7 8 22.4 8 17.2 12.1 13 17.2 13c2.9 0 5.6 1.4 7.3 3.6C26.2 14.4 28.9 13 31.8 13 36.9 13 41 17.2 41 22.4 41 28.7 35.8 33.4 24 41Z"
+        ),
     ),
     "petals": (
-        Shape("M24 6c4 0 7 3.4 7 7.6 0 1.3-.3 2.5-.8 3.6 1-.6 2.2-1 3.5-1 4 0 7.3 3.4 7.3 7.6S37.7 31.4 33.7 31.4c-1.3 0-2.5-.4-3.5-1 .5 1.1.8 2.3.8 3.6C31 38.2 28 41.6 24 41.6s-7-3.4-7-7.6c0-1.3.3-2.5.8-3.6-1 .6-2.2 1-3.5 1-4 0-7.3-3.4-7.3-7.6s3.3-7.6 7.3-7.6c1.3 0 2.5.4 3.5 1-.5-1.1-.8-2.3-.8-3.6C17 9.4 20 6 24 6Z"),
+        Shape(
+            "M24 6c4 0 7 3.4 7 7.6 0 1.3-.3 2.5-.8 3.6 1-.6 2.2-1 3.5-1 4 0 7.3 3.4 7.3 7.6S37.7 31.4 33.7 31.4c-1.3 0-2.5-.4-3.5-1 .5 1.1.8 2.3.8 3.6C31 38.2 28 41.6 24 41.6s-7-3.4-7-7.6c0-1.3.3-2.5.8-3.6-1 .6-2.2 1-3.5 1-4 0-7.3-3.4-7.3-7.6s3.3-7.6 7.3-7.6c1.3 0 2.5.4 3.5 1-.5-1.1-.8-2.3-.8-3.6C17 9.4 20 6 24 6Z"
+        ),
     ),
     "star": (
         Shape("M24 6l4.9 12.3L42 20.4l-9.5 8.9 2.5 13.1L24 36.1l-11 6.3 2.5-13.1L6 20.4l13.1-2.1Z"),
@@ -195,18 +291,31 @@ MOTIF_SHAPES: dict[str, tuple[Shape, ...]] = {
         ),
     ),
     "sparkle": (
-        Shape("M24 5c1.6 8.6 4.4 11.4 13 13-8.6 1.6-11.4 4.4-13 13-1.6-8.6-4.4-11.4-13-13 8.6-1.6 11.4-4.4 13-13Z"),
-        Shape("M36.5 30c.8 4.3 2.2 5.7 6.5 6.5-4.3.8-5.7 2.2-6.5 6.5-.8-4.3-2.2-5.7-6.5-6.5 4.3-.8 5.7-2.2 6.5-6.5Z"),
+        Shape(
+            "M24 5c1.6 8.6 4.4 11.4 13 13-8.6 1.6-11.4 4.4-13 13-1.6-8.6-4.4-11.4-13-13 8.6-1.6 11.4-4.4 13-13Z"
+        ),
+        Shape(
+            "M36.5 30c.8 4.3 2.2 5.7 6.5 6.5-4.3.8-5.7 2.2-6.5 6.5-.8-4.3-2.2-5.7-6.5-6.5 4.3-.8 5.7-2.2 6.5-6.5Z"
+        ),
     ),
     "leaf": (
-        Shape("M39 9C20 11 10 20 10 31c0 3 .8 5.6 2.2 7.6C16 30 23 23.5 33 20.5 24 25 17 32 14.5 41.5", width=3),
+        Shape(
+            "M39 9C20 11 10 20 10 31c0 3 .8 5.6 2.2 7.6C16 30 23 23.5 33 20.5 24 25 17 32 14.5 41.5",
+            width=3,
+        ),
     ),
     "moon": (
-        Shape("M34 10 C26 12 20 18 20 24 C20 30 26 36 34 38 C24 40 14 33 14 24 C14 15 24 8 34 10 Z"),
+        Shape(
+            "M34 10 C26 12 20 18 20 24 C20 30 26 36 34 38 C24 40 14 33 14 24 C14 15 24 8 34 10 Z"
+        ),
     ),
     "butterfly": (
-        Shape("M24 24c-3-5-10-7-14-2 0 5.5 3.6 10.6 8.9 10.6 3.5 0 5.1-3.4 5.1-8.6Zm0 0c3-5 10-7 14-2 0 5.5-3.6 10.6-8.9 10.6-3.5 0-5.1-3.4-5.1-8.6Z"),
-        Shape("M24 21.5c-.7-4-2-7.5-3.6-9.5 2.4-.6 3.6.9 3.6 9.5Zm0 0c.7-4 2-7.5 3.6-9.5-2.4-.6-3.6.9-3.6 9.5Z"),
+        Shape(
+            "M24 24c-3-5-10-7-14-2 0 5.5 3.6 10.6 8.9 10.6 3.5 0 5.1-3.4 5.1-8.6Zm0 0c3-5 10-7 14-2 0 5.5-3.6 10.6-8.9 10.6-3.5 0-5.1-3.4-5.1-8.6Z"
+        ),
+        Shape(
+            "M24 21.5c-.7-4-2-7.5-3.6-9.5 2.4-.6 3.6.9 3.6 9.5Zm0 0c.7-4 2-7.5 3.6-9.5-2.4-.6-3.6.9-3.6 9.5Z"
+        ),
     ),
 }
 

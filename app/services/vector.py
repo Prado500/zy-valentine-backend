@@ -32,8 +32,14 @@ def _cubic(start: Point, one: Point, two: Point, end: Point, steps: int) -> list
         u = 1 - t
         points.append(
             (
-                u * u * u * start[0] + 3 * u * u * t * one[0] + 3 * u * t * t * two[0] + t**3 * end[0],
-                u * u * u * start[1] + 3 * u * u * t * one[1] + 3 * u * t * t * two[1] + t**3 * end[1],
+                u * u * u * start[0]
+                + 3 * u * u * t * one[0]
+                + 3 * u * t * t * two[0]
+                + t**3 * end[0],
+                u * u * u * start[1]
+                + 3 * u * u * t * one[1]
+                + 3 * u * t * t * two[1]
+                + t**3 * end[1],
             )
         )
     return points
@@ -88,7 +94,10 @@ def contours(path: str, steps: int = STEPS) -> tuple[Contour, ...]:
 def circle(cx: float, cy: float, radius: float, steps: int = 48) -> tuple[Contour, ...]:
     """Círculo como contorno, para los motivos que traen un ``<circle>`` (el sol)."""
     points = tuple(
-        (cx + radius * math.cos(2 * math.pi * index / steps), cy + radius * math.sin(2 * math.pi * index / steps))
+        (
+            cx + radius * math.cos(2 * math.pi * index / steps),
+            cy + radius * math.sin(2 * math.pi * index / steps),
+        )
         for index in range(steps)
     )
     return ((points, True),)

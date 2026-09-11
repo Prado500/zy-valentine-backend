@@ -17,17 +17,27 @@ from app.schemas.auth import Login, Register
 
 
 async def register(db: AsyncSession, payload: Register, limiter: CapacityLimiter) -> User:
+    """Crea el usuario y lo deja en la sesión, **sin cerrar la transacción**.
+
+    El alta ya no es solo un usuario: son usuario, documento y consentimiento, y las
+    tres cosas tienen que entrar juntas o no entrar. El ``commit`` lo hace
+    ``AccountService.register``, que es quien orquesta las tres.
+
+    El ``flush`` sí es necesario aquí: dispara la restricción única del correo en este
+    punto, donde todavía sabemos que el 409 es "ese correo ya tiene cuenta". Y deja el
+    ``id`` puesto, que es lo que el documento y el consentimiento necesitan para
+    referenciarlo.
+    """
     if await users.by_email(db, payload.email):
         raise ApiError(409, "EMAIL_IN_USE", "No se puede registrar ese correo.")
     hashed = await to_thread.run_sync(password_hasher.hash, payload.password, limiter=limiter)
     user = User(email=payload.email, name=payload.name, password_hash=hashed)
     db.add(user)
     try:
-        await db.commit()
+        await db.flush()
     except IntegrityError:
         await db.rollback()
         raise ApiError(409, "EMAIL_IN_USE", "No se puede registrar ese correo.") from None
-    await db.refresh(user)
     return user
 
 

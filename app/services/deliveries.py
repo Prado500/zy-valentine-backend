@@ -131,7 +131,9 @@ async def build_card(
         )
         return None
     if len(pdf) > settings.max_letter_card_bytes:
-        LOG.warning("Tarjeta QR de la carta %s descartada por tamaño (%s bytes)", letter.id, len(pdf))
+        LOG.warning(
+            "Tarjeta QR de la carta %s descartada por tamaño (%s bytes)", letter.id, len(pdf)
+        )
         return None
     return Attachment(
         filename=card_name(letter), content=pdf, maintype="application", subtype="pdf"

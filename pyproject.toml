@@ -24,7 +24,8 @@ dependencies = [
     "httpx>=0.28,<1",
     "segno>=1.6,<2",
     "python-multipart>=0.0.9,<1",
-    "fpdf2>=2.8.8,<3"
+    "fpdf2>=2.8.8,<3",
+    "cryptography>=43,<51"
 ]
 
 [project.optional-dependencies]
@@ -56,10 +57,18 @@ include = ["app*"]
 [tool.setuptools.package-data]
 "app.assets.fonts" = ["*.ttf", "*.txt", "*.md"]
 "app.assets.flowers" = ["*.md", "tema */*.webp"]
+# Texto legal que sirve la API y cuyo checksum firma cada consentimiento.
+"app.legal" = ["*.md"]
 
 [tool.ruff]
 target-version = "py311"
 line-length = 100
+
+[tool.ruff.format]
+# La documentación lleva fragmentos de Python alineados a mano para que se lean
+# como una explicación, no como código de producción. El formateador los
+# desalinearía sin que nadie gane nada: aquí manda el autor, no la herramienta.
+exclude = ["*.md"]
 
 [tool.ruff.lint]
 select = ["E4", "E7", "E9", "F", "I", "UP", "B"]

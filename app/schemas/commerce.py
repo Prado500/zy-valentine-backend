@@ -4,7 +4,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
-from app.schemas.auth import Input
+from app.schemas.auth import DocumentInput, Input
 
 # Emojis, acentos y saltos de línea son contenido válido de una carta; solo se
 # rechazan caracteres de control que romperían el visor o el correo.
@@ -18,15 +18,13 @@ def _clean_text(value: str) -> str:
     return value
 
 
-class IdentityDocumentInput(Input):
-    """Cédula: dato privado. Nunca viaja de vuelta ni aparece en enlaces públicos."""
-
-    documentType: str = Field(pattern="^(CC|CE|PA|NIT)$")
-    documentNumber: str = Field(min_length=5, max_length=20, pattern=r"^[0-9A-Za-z\-]+$")
+class IdentityDocumentInput(DocumentInput):
+    """Documento: dato privado. Nunca viaja de vuelta ni aparece en enlaces públicos."""
 
 
 class IdentityDocumentResponse(BaseModel):
-    documentType: str
+    # Código DIAN; la etiqueta la pone el frontend con su copia del catálogo.
+    documentType: int
     documentLast4: str
     createdAt: datetime
 

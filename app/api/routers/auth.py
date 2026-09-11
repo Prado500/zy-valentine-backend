@@ -52,14 +52,30 @@ async def csrf(request: Request, response: Response):
     return {"csrfToken": token}
 
 
+def audit_trail(request: Request) -> tuple[str | None, str | None]:
+    """IP y agente para la prueba de autorización (Decreto 1377 de 2013, art. 7).
+
+    **Limitación conocida:** uvicorn corre con ``--no-proxy-headers``, así que detrás de
+    Azure esta IP es la del ingress, no la del titular. Arreglarlo toca el rate limiter
+    y va en un PR aparte; mientras tanto se guarda lo que hay, que es mejor que nada.
+    """
+    client = request.client.host if request.client else None
+    return client, request.headers.get("user-agent")
+
+
 @router.post(
     "/auth/register",
     response_model=UserResponse,
     status_code=201,
     dependencies=[Depends(csrf_guard), Depends(auth_limit)],
 )
-async def register(payload: Register, service: AccountService = Depends(account_service)):
-    return await service.register(payload)
+async def register(
+    payload: Register,
+    request: Request,
+    service: AccountService = Depends(account_service),
+):
+    ip, user_agent = audit_trail(request)
+    return await service.register(payload, ip, user_agent)
 
 
 @router.post(

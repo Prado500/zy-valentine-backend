@@ -65,7 +65,7 @@ def test_the_flattening_is_cached_and_deterministic():
 
 
 def test_a_circle_closes_on_itself():
-    (points, closed), = vector.circle(10, 10, 5, steps=16)
+    ((points, closed),) = vector.circle(10, 10, 5, steps=16)
 
     assert closed and len(points) == 16
     assert all(abs(((x - 10) ** 2 + (y - 10) ** 2) ** 0.5 - 5) < 1e-9 for x, y in points)

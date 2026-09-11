@@ -176,7 +176,11 @@ def draw_emblem(draw, palette: Palette, left: float, top: float, width: float, l
     for path in EMBLEM_WINGS:
         _fill(draw, vector.place(vector.contours(path), k, left, top), _rgba(palette.metal))
     for path in EMBLEM_HIGHLIGHTS:
-        _fill(draw, vector.place(vector.contours(path), k, left, top), (255, 255, 255, round(255 * EMBLEM_HIGHLIGHT_ALPHA)))
+        _fill(
+            draw,
+            vector.place(vector.contours(path), k, left, top),
+            (255, 255, 255, round(255 * EMBLEM_HIGHLIGHT_ALPHA)),
+        )
     size, cx, cy = EMBLEM_MOTIF
     motif_scale, motif_dx, motif_dy = motif_transform(palette.motif, size, cx, cy)
     _draw_motif(draw, palette.motif, dark, motif_scale * k, motif_dx * k + left, motif_dy * k + top)
@@ -216,7 +220,8 @@ def code_geometry(box: int, count: int, step: int) -> CodeGeometry:
 def code_modules(url: str) -> list[list[int]]:
     """Matriz del código, con su zona de silencio incluida."""
     return [
-        list(row) for row in segno.make(url, error=ERROR_LEVEL).matrix_iter(scale=1, border=QUIET_ZONE)
+        list(row)
+        for row in segno.make(url, error=ERROR_LEVEL).matrix_iter(scale=1, border=QUIET_ZONE)
     ]
 
 
@@ -293,7 +298,9 @@ def draw_tile(draw, palette: Palette, m: Metrics, url: str, left: int, top: int,
         outline=_rgba(palette.metal, 0.4),
         width=max(1, round(step)),
     )
-    draw_code(draw, palette, url, left + m.tile_pad * step, top + m.tile_pad * step, m.qr * step, step)
+    draw_code(
+        draw, palette, url, left + m.tile_pad * step, top + m.tile_pad * step, m.qr * step, step
+    )
 
 
 class _Painter:
@@ -480,7 +487,13 @@ class _Painter:
         y = m.pad_top * s
         self.line(TO_LABEL, y, m.name_label * s, pil_font(SERIF, m.name_label * s), ink)
         y += m.name_label * s
-        self.line(recipient, y, m.name_line * s, self._fit(SCRIPT, recipient, m.name_size * s, 16 * s, inner), names)
+        self.line(
+            recipient,
+            y,
+            m.name_line * s,
+            self._fit(SCRIPT, recipient, m.name_size * s, 16 * s, inner),
+            names,
+        )
         y += (m.name_line + m.gap_after_name) * s
 
         note_font = pil_font(SERIF, m.note_size * s)
@@ -495,7 +508,13 @@ class _Painter:
 
         self.line(FROM_LABEL, y, m.from_label * s, pil_font(SERIF, m.from_label * s), ink)
         y += m.from_label * s
-        self.line(sender, y, m.from_line * s, self._fit(SCRIPT, sender, m.from_size * s, 14 * s, inner), names)
+        self.line(
+            sender,
+            y,
+            m.from_line * s,
+            self._fit(SCRIPT, sender, m.from_size * s, 14 * s, inner),
+            names,
+        )
 
     def output(self, width: int | None) -> bytes:
         image = Image.new("RGB", self.size, _rgba(self.background)[:3])
@@ -508,7 +527,9 @@ class _Painter:
         return buffer.getvalue()
 
 
-def render_postcard(content: PostcardContent, width: int | None = None, scale: int = SCALE) -> bytes:
+def render_postcard(
+    content: PostcardContent, width: int | None = None, scale: int = SCALE
+) -> bytes:
     """PNG de la postal completa. Sin ``width`` sale a ``scale`` veces el tamaño de diseño."""
     palette = palette_for(content.theme)
     m = metrics()
@@ -521,7 +542,9 @@ def render_postcard(content: PostcardContent, width: int | None = None, scale: i
     return painter.output(width)
 
 
-def render_qr_tile(theme: str | None, url: str, width: int | None = None, scale: int = SCALE) -> bytes:
+def render_qr_tile(
+    theme: str | None, url: str, width: int | None = None, scale: int = SCALE
+) -> bytes:
     """PNG de la baldosa suelta: el código estilizado, sin nombres. Es lo que va al correo.
 
     El fondo es el papel del tema porque el correo la pone sobre esa misma tarjeta: así
