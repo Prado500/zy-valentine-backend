@@ -20,7 +20,9 @@ SONG = "https://youtu.be/dQw4w9WgXcQ"
 def test_happy_path_sender_and_song_in_the_order_the_form_writes_them():
     parsed = parse_body(f"Hola, Ana.\n\nTe quiero.\n\nDe parte de: Sebastián\n\nCanción: {SONG}")
 
-    assert parsed == ParsedBody(message="Hola, Ana.\n\nTe quiero.", sender="Sebastián", song_url=SONG)
+    assert parsed == ParsedBody(
+        message="Hola, Ana.\n\nTe quiero.", sender="Sebastián", song_url=SONG
+    )
 
 
 def test_happy_path_the_two_marks_are_found_in_either_order():
@@ -34,7 +36,10 @@ def test_happy_path_the_two_marks_are_found_in_either_order():
     [
         ("Hola\n\nDe parte de: Ana", ParsedBody("Hola", "Ana", None)),
         (f"Hola\n\nCanción: {SONG}", ParsedBody("Hola", None, SONG)),
-        ("Hola\nDe parte de:Ana", ParsedBody("Hola", "Ana", None)),  # sin espacio ni línea en blanco
+        (
+            "Hola\nDe parte de:Ana",
+            ParsedBody("Hola", "Ana", None),
+        ),  # sin espacio ni línea en blanco
         ("Hola\r\n\r\nDe parte de: Ana\r\n", ParsedBody("Hola", "Ana", None)),  # cliente viejo
         ("De parte de: Ana", ParsedBody("", "Ana", None)),  # solo la firma
         ("Solo un mensaje", ParsedBody("Solo un mensaje", None, None)),

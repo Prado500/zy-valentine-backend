@@ -34,7 +34,9 @@ async def test_a_broken_card_render_does_not_break_the_delivery(
     assert "RuntimeError" in caplog.text and "fuente corrupta" not in caplog.text  # solo el tipo
 
 
-async def test_the_card_can_be_switched_off_without_a_deploy(client, paid_purchase, app, monkeypatch):
+async def test_the_card_can_be_switched_off_without_a_deploy(
+    client, paid_purchase, app, monkeypatch
+):
     monkeypatch.setattr(app.state.settings, "letter_card_enabled", False)
     letter = (await create_letter(client, paid_purchase)).json()
 
