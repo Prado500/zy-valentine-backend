@@ -227,3 +227,38 @@ def test_un_worker_vivo_no_interrumpe_la_api(tmp_path):
     assert resultado.returncode == 0, "el vigilante tumbo una API sana"
     assert "api-termino-sola" in (tmp_path / "salida").read_text(encoding="utf-8")
     assert "FATAL" not in (tmp_path / "errores").read_text(encoding="utf-8")
+
+
+# --- La imagen ------------------------------------------------------------------------
+
+DOCKERFILE = REPO_ROOT / "Dockerfile"
+
+
+def test_la_imagen_arranca_por_el_guion():
+    contenido = DOCKERFILE.read_text(encoding="utf-8")
+    assert "COPY entrypoint.sh ./" in contenido
+    assert 'CMD ["./entrypoint.sh"]' in contenido
+
+
+def test_el_guion_recibe_permiso_de_ejecucion_antes_de_bajar_de_privilegios():
+    """Un `chmod` despues de `USER appuser` fallaria: el fichero es de root."""
+    lineas = DOCKERFILE.read_text(encoding="utf-8").splitlines()
+    chmod = next(i for i, linea in enumerate(lineas) if "chmod +x entrypoint.sh" in linea)
+    usuario = next(i for i, linea in enumerate(lineas) if linea.startswith("USER "))
+    assert chmod < usuario
+
+
+def test_la_imagen_usa_cmd_y_no_entrypoint():
+    """El CD ejecuta `docker run <imagen> alembic upgrade head`, que sustituye al CMD.
+
+    Con `ENTRYPOINT`, esos argumentos llegarian al guion, que los ignora y arranca
+    uvicorn: las migraciones dejarian de aplicarse **en silencio** y el pipeline
+    seguiria en verde. Se comprueba la instruccion, no la palabra, para que el
+    Dockerfile pueda explicar el motivo en un comentario.
+    """
+    instrucciones = [
+        linea.strip()
+        for linea in DOCKERFILE.read_text(encoding="utf-8").splitlines()
+        if linea.strip().startswith("ENTRYPOINT")
+    ]
+    assert not instrucciones, f"el Dockerfile declara ENTRYPOINT: {instrucciones}"
