@@ -47,6 +47,10 @@ async def test_the_card_can_be_switched_off_without_a_deploy(client, paid_purcha
     # Las rutas de descarga respetan el mismo interruptor.
     card = await client.get(f"/api/v1/letters/{letter['id']}/card.pdf")
     assert card.status_code == 503 and card.json()["code"] == "LETTER_CARD_DISABLED"
+    postal = await client.get(f"/api/v1/letters/{letter['id']}/postal.png")
+    assert postal.status_code == 503
+    # El código del cuerpo no depende del interruptor: sin él no habría correo que enviar.
+    assert app.state.mailer.sent[-1].inline[0].subtype == "png"
 
 
 async def test_an_oversized_card_is_dropped_with_a_warning(

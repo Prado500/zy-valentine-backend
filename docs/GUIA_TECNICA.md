@@ -486,13 +486,12 @@ ni otra compra.
 
 Antes de enviar, `deliver` separa una sola vez el remitente y la canción del final de
 `body` (`app/services/letter_body.py`) y arma el único adjunto, la tarjeta QR en PDF
-(`build_card`, en un hilo y con `CapacityLimiter(1)`: `app/services/cards.py`
-subconjunta cuatro fuentes), con su propio `try/except` y `LOG.warning`: si falla, el
-correo sale igual con el enlace y el QR del cuerpo. `qr_reference` decide cómo viaja ese
-QR: imagen remota al endpoint público si hay `API_PUBLIC_URL`, o parte incrustada por
-Content-ID. El correo se dirige al comprador, se pinta con la paleta del tema
-(`app/services/themes.py`) y lleva incrustados los consejos de
-`app/services/gift_tips.py`; la dedicatoria y la canción se quedan en el PDF y el visor.
+(`build_card`, en un hilo y con `CapacityLimiter(1)`), con su propio `try/except` y
+`LOG.warning`: si falla, el correo sale igual con el enlace y el código. `build_qr`
+decide cómo viaja ese código: imagen remota al endpoint público si hay `API_PUBLIC_URL`,
+o parte incrustada por Content-ID. El correo se dirige al comprador, se pinta con la
+paleta del tema (`app/services/themes.py`) y lleva incrustados los consejos de
+`app/services/gift_tips.py`; la dedicatoria y la canción se quedan en la postal y el visor.
 
 ### 7.6 Puertos externos
 
@@ -517,9 +516,12 @@ bloquear el bucle de eventos.
 en un hilo. `render_letter_email` genera el HTML; **todo lo que viene del usuario pasa
 por `html.escape`**, así que un título con `<script>` no se convierte en HTML.
 
-**`qr.py`** — `segno`, biblioteca en Python puro sin dependencias binarias. `qr_png`
-devuelve la imagen para los endpoints y la parte incrustada del correo; la tarjeta PDF
-dibuja el QR como vectores a partir de la matriz de `segno`.
+**`postcard.py`** — la postal, dibujada con Pillow a partir de la matriz que da `segno`.
+Un solo dibujo alimenta la baldosa del correo, el PNG de `postal.png` y la imagen que el
+PDF coloca en la hoja, así que no pueden verse distintos. Alrededor: `qr_card.py` (las
+medidas, port de `utils/qrCard.ts`), `vector.py` (los trazados SVG del frontend aplanados
+con fontTools), `first_phrase.py` (la frase que se asoma) y `fonts.py` (las fuentes
+vendorizadas y el filtro de glifos que ninguna trae).
 
 ---
 

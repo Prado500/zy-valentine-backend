@@ -5,13 +5,17 @@ las integraciones se inyectan por puerto (ver ``FakeGateway`` en conftest).
 """
 
 import asyncio
+import io
 
 import httpx
 import pytest
+from PIL import Image
 from sqlalchemy import func, select
 
 from app.models.commerce import Letter, LetterDelivery, Purchase
+from app.services.deliveries import EMAIL_QR_WIDTH
 from app.services.mailer import ConsoleMailer
+from app.services.themes import THEMES, hex_to_rgb
 from tests.conftest import BUYER, new_purchase, pay
 
 PNG = b"\x89PNG\r\n\x1a\n" + b"0" * 64
@@ -383,6 +387,11 @@ async def test_public_viewer_hides_buyer_data(client, paid_purchase, app):
         qr = await anonymous.get(f"/api/v1/public/letters/{slug}/qr.png")
         assert qr.status_code == 200
         assert qr.content[:8] == b"\x89PNG\r\n\x1a\n"
+        # No es un cuadrado de módulos pelado: es la baldosa del tema, cuadrada y con su
+        # papel, la misma que enseña la app.
+        tile = Image.open(io.BytesIO(qr.content))
+        assert tile.size == (EMAIL_QR_WIDTH, EMAIL_QR_WIDTH)
+        assert tile.convert("RGB").getpixel((0, 0)) == hex_to_rgb(THEMES["classic"].card_bg)
         # El botón "Descargar QR" del front usa <a download> sobre otro origen, que el
         # navegador ignora: la descarga la fuerza el servidor.
         assert qr.headers["content-disposition"].startswith(f'attachment; filename="qr-{slug}.png"')
@@ -394,12 +403,18 @@ async def test_public_viewer_hides_buyer_data(client, paid_purchase, app):
         assert card.headers["content-disposition"].startswith('attachment; filename="tarjeta-qr-')
         assert card.headers["cache-control"] == "public, max-age=86400"
         assert BUYER["email"] not in card.content.decode("latin-1")
+        postal = await anonymous.get(f"/api/v1/public/letters/{slug}/postal.png")
+        assert postal.status_code == 200
+        assert postal.headers["content-type"] == "image/png"
+        assert Image.open(io.BytesIO(postal.content)).size[0] > EMAIL_QR_WIDTH
+        assert postal.headers["cache-control"] == "public, max-age=86400"
 
 
 async def test_draft_has_no_public_page(client, paid_purchase, app):
     letter = (await create_letter(client, paid_purchase)).json()
     assert (await client.get(f"/api/v1/letters/{letter['id']}/qr.png")).status_code == 409
     assert (await client.get(f"/api/v1/letters/{letter['id']}/card.pdf")).status_code == 409
+    assert (await client.get(f"/api/v1/letters/{letter['id']}/postal.png")).status_code == 409
     assert letter["qrUrl"] is None and letter["cardUrl"] is None
     async with app.state.sessions() as db:
         slug = await db.scalar(select(Letter.public_slug))
@@ -408,6 +423,7 @@ async def test_draft_has_no_public_page(client, paid_purchase, app):
     ) as anonymous:
         assert (await anonymous.get(f"/api/v1/public/letters/{slug}")).status_code == 404
         assert (await anonymous.get(f"/api/v1/public/letters/{slug}/card.pdf")).status_code == 404
+        assert (await anonymous.get(f"/api/v1/public/letters/{slug}/postal.png")).status_code == 404
 
 
 async def test_owner_downloads_the_card_the_payload_links(client, paid_purchase, app):

@@ -360,6 +360,16 @@ async def letter_card(
     return binary(await service.letter_card(user, letter_id))
 
 
+@router.get("/letters/{letter_id}/postal.png")
+async def letter_postcard(
+    letter_id: uuid.UUID,
+    user: User = Depends(current_user),
+    service: CommerceService = Depends(commerce_service),
+):
+    """La postal en PNG: lo mismo que va dentro del PDF, sin la hoja alrededor."""
+    return binary(await service.letter_postcard(user, letter_id))
+
+
 # --- Visor público (sin sesión, sin datos personales del comprador) ------------------
 
 
@@ -383,6 +393,11 @@ async def public_qr(slug: str, service: CommerceService = Depends(commerce_servi
 @public_router.get("/letters/{slug}/card.pdf")
 async def public_card(slug: str, service: CommerceService = Depends(commerce_service)):
     return binary(await service.public_card(slug))
+
+
+@public_router.get("/letters/{slug}/postal.png")
+async def public_postcard(slug: str, service: CommerceService = Depends(commerce_service)):
+    return binary(await service.public_postcard(slug))
 
 
 @router.get("/health/commerce", response_model=CommerceHealth, include_in_schema=False)
