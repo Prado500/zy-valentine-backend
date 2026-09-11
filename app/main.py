@@ -22,7 +22,7 @@ from app.services.payments import build_gateway
 from app.services.service_bus import build_publisher
 from app.services.storage import build_storage
 
-EXPECTED_REVISION = "0002_commerce"
+EXPECTED_REVISION = "0003_dian_and_consent"
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
