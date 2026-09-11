@@ -4,20 +4,21 @@ Cada intento crea una fila en ``letter_deliveries`` con su propio estado. Ningú
 camino de este módulo crea compras ni cartas, de modo que reenviar una carta no
 consume otra compra.
 
-El correo va al comprador (IOP #7): agradecimiento, enlace y QR, consejos para
-acompañar la carta y un único adjunto, la **tarjeta QR en PDF** con el diseño del tema
-y la dedicatoria «De X con cariño para Y». La tarjeta cuesta CPU —subconjuntar cuatro
-fuentes— y se construye fuera del bucle de eventos con ``anyio.to_thread.run_sync`` y
-un ``CapacityLimiter`` de uno, porque la B1ms tiene un núcleo. No es imprescindible:
-si falla, se anota y el correo sale con el enlace y el QR del cuerpo.
+El correo va al comprador (IOP #7): agradecimiento, enlace, el código estilizado del
+tema, consejos para acompañar la carta y un único adjunto, la **tarjeta QR en PDF** con
+la postal completa y la dedicatoria «Para Y / De X». Dibujar la postal cuesta CPU, así
+que se hace fuera del bucle de eventos con ``anyio.to_thread.run_sync`` y un
+``CapacityLimiter`` de uno, porque la B1ms tiene un núcleo. La tarjeta no es
+imprescindible: si falla, se anota y el correo sale con el enlace y el código.
 
-El QR del cuerpo tiene dos vías. Con ``API_PUBLIC_URL`` va como imagen remota
+El código del cuerpo tiene dos vías. Con ``API_PUBLIC_URL`` va como imagen remota
 (``/api/v1/public/letters/{slug}/qr.png``), que todos los clientes muestran; sin ella,
 incrustado por Content-ID (``cid:``), que algunos clientes no pintan.
 
 El remitente y la canción no son columnas: viajan al final de ``letters.body`` y se
 separan aquí una sola vez (:func:`app.services.letter_body.parse_body`). Solo la
-tarjeta los usa: el correo no lleva la dedicatoria ni la canción.
+postal usa el remitente y la primera frase; el correo no lleva la dedicatoria ni la
+canción.
 """
 
 import logging
@@ -32,10 +33,11 @@ from app.core.config import Settings
 from app.core.errors import ApiError
 from app.models.commerce import Letter, LetterDelivery
 from app.services.cards import CardContent, card_name, render_card_pdf
+from app.services.first_phrase import first_phrase
 from app.services.letter_body import ParsedBody, parse_body
 from app.services.letters import public_url
 from app.services.mailer import Attachment, Mailer, render_letter_email
-from app.services.qr import qr_png
+from app.services.postcard import render_qr_tile
 
 LOG = logging.getLogger("app.deliveries")
 
@@ -44,6 +46,10 @@ LOG = logging.getLogger("app.deliveries")
 # consulta DNS inversa bloqueante dentro del bucle de eventos y, de paso, publicaría el
 # nombre del contenedor en cada correo. `.invalid` está reservado por el RFC 2606.
 CID_DOMAIN = "zy-valentine.invalid"
+
+# Ancho del código en el correo: el doble de su tamaño de diseño (232 px), para que no se
+# vea borroso en pantallas densas. El HTML lo muestra a la mitad.
+EMAIL_QR_WIDTH = 464
 
 _card_limiter: CapacityLimiter | None = None
 
@@ -60,8 +66,8 @@ def card_limiter() -> CapacityLimiter:
     return _card_limiter
 
 
-def qr_part(url: str, png: bytes | None = None) -> tuple[str, Attachment]:
-    """QR del cuerpo del correo: devuelve (``src`` del ``<img>``, parte incrustada).
+def qr_part(theme: str | None, url: str) -> tuple[str, Attachment]:
+    """Código del cuerpo del correo: (``src`` del ``<img>``, parte incrustada).
 
     Un único sitio construye las dos mitades para que no puedan divergir: la cabecera
     ``Content-ID`` lleva los ``<>`` y el ``src`` los lleva pelados, y un identificador que
@@ -71,7 +77,7 @@ def qr_part(url: str, png: bytes | None = None) -> tuple[str, Attachment]:
     cid = make_msgid(idstring="qr", domain=CID_DOMAIN)
     part = Attachment(
         filename="qr.png",
-        content=png if png is not None else qr_png(url),
+        content=render_qr_tile(theme, url, EMAIL_QR_WIDTH),
         maintype="image",
         subtype="png",
         cid=cid,
@@ -79,18 +85,20 @@ def qr_part(url: str, png: bytes | None = None) -> tuple[str, Attachment]:
     return f"cid:{cid[1:-1]}", part
 
 
-def qr_reference(
+async def build_qr(
     settings: Settings, letter: Letter, url: str
 ) -> tuple[str, tuple[Attachment, ...]]:
     """(``src`` del ``<img>``, partes incrustadas) según haya o no origen público de la API.
 
-    Con ``API_PUBLIC_URL`` el QR es una imagen remota servida por
+    Con ``API_PUBLIC_URL`` el código es una imagen remota servida por
     ``GET /api/v1/public/letters/{slug}/qr.png`` (pública y cacheable): es la vía que
     todos los clientes de correo muestran. Sin ella se incrusta por Content-ID.
     """
     if settings.api_public_url:
         return f"{settings.api_public_url}/api/v1/public/letters/{letter.public_slug}/qr.png", ()
-    source, part = qr_part(url)
+    source, part = await to_thread.run_sync(
+        partial(qr_part, letter.theme, url), limiter=card_limiter()
+    )
     return source, (part,)
 
 
@@ -109,6 +117,7 @@ async def build_card(
         title=letter.title,
         recipient_name=letter.recipient_name,
         sender_name=parsed.sender,
+        note=first_phrase(parsed.message),
         public_url=url,
         theme=letter.theme,
         letter_id=str(letter.id),
@@ -157,7 +166,7 @@ async def deliver(
     await db.refresh(delivery)
 
     card = await build_card(settings, letter, parsed, url)
-    qr_source, inline = qr_reference(settings, letter, url)
+    qr_source, inline = await build_qr(settings, letter, url)
     message = render_letter_email(
         to=address,
         title=letter.title,

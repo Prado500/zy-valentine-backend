@@ -160,11 +160,13 @@ cae en `classic`) y lleva:
 - «¡Gracias por tu compra!», el título de la carta, el botón al visor público y «Les
   deseamos un feliz día en pareja». La dedicatoria «De X con cariño para Y» **no** va en
   el correo (vive en la tarjeta PDF) y la canción tampoco (vive en el visor).
-- El código QR. Con `API_PUBLIC_URL` es una **imagen remota** servida por
-  `GET /api/v1/public/letters/{slug}/qr.png`, que todos los clientes muestran; sin ella
-  va **incrustado por Content-ID** (`cid:`, parte `multipart/related` con disposición
-  `inline` y nombre de archivo, que Outlook exige). Nunca como `data:` URI: Gmail, Outlook
-  y Yahoo lo descartan y el destinatario solo veía el texto alternativo.
+- El código, en la **baldosa estilizada** del tema: el mismo dibujo que enseña la app,
+  con su papel, su borde y el emblema alado en el centro. Con `API_PUBLIC_URL` es una
+  **imagen remota** servida por `GET /api/v1/public/letters/{slug}/qr.png`, que todos los
+  clientes muestran; sin ella va **incrustada por Content-ID** (`cid:`, parte
+  `multipart/related` con disposición `inline` y nombre de archivo, que Outlook exige).
+  Nunca como `data:` URI: Gmail, Outlook y Yahoo lo descartan y el destinatario solo veía
+  el texto alternativo.
 - La sección «Para acompañar tu carta», incrustada en el HTML: mensaje general, flores,
   algo dulce y un detalle acordes al estilo (`app/services/gift_tips.py`, texto de
   negocio editable) y cómo entregarla.
@@ -179,19 +181,33 @@ backend las separa una sola vez con `parse_body` (`app/services/letter_body.py`)
 una. Sin firma no se usa el nombre de la cuenta: quien no firmó eligió no hacerlo. Solo
 se enlaza una canción de YouTube en `https`.
 
-**Tarjeta QR (PDF).** A5 vertical, una página, con el diseño del tema
-(`app/services/cards.py`, fpdf2): fondo, hoja, filo y trama del papel, filigranas, lacre
-con el motivo, «De X con cariño para Y» en Great Vibes, el título y el QR dibujado como
-vectores con los colores del tema (sobre blanco en los temas oscuros y con contraste ≥ 7,
-la misma regla que el front). Las fuentes van vendorizadas en `app/assets/fonts` (OFL);
-lo que ninguna tiene (emojis) se filtra antes de dibujar. Se genera en un hilo, de uno
-en uno, y se puede apagar con `LETTER_CARD_ENABLED=false`.
+**La postal.** Es la misma tarjeta que el comprador ve y descarga desde la app, dibujada
+en el servidor con Pillow (`app/services/postcard.py`): papel del tema con su trama, filo
+doble, cuatro flores, filigranas en las esquinas, «P A R A» con el nombre de quien la
+recibe, la primera frase de la carta, «Escanéalo…», el código con el **emblema alado** en
+el centro y «D E» con la firma. Las medidas y los adornos son un port de
+`src/utils/qrCard.ts` (`app/services/qr_card.py`), y los trazados SVG del frontend se
+aplanan con fontTools (`app/services/vector.py`).
+
+Se dibuja **una sola vez** y sirve para todo: el correo lleva la baldosa suelta y el PDF
+la postal entera. Se pinta a 4× y se reduce, porque Pillow no antialiasa; el módulo del
+código mide un múltiplo entero de esa escala para que al reducir no se emborrone. El
+código va en nivel **H** con zona de silencio de 4 módulos, y los módulos que tapa el
+emblema se apagan antes de dibujar (7 % del área, frente al 30 % que H tolera).
+
+**Tarjeta QR (PDF).** A5 vertical, una página, con la postal centrada a 100 mm —unos 297
+puntos por pulgada— sobre el fondo del tema y un pie discreto (`app/services/cards.py`).
+Las fuentes van vendorizadas en `app/assets/fonts` y las flores en `app/assets/flowers`
+(OFL las primeras; el número de carpeta de las flores es el tema y **no** sigue el orden
+de la lista). Lo que ninguna fuente tiene —los emojis— se filtra antes de dibujar. Se
+genera en un hilo, de uno en uno, y se puede apagar con `LETTER_CARD_ENABLED=false`.
 
 El estado del envío se persiste; un fallo de SMTP deja la entrega en `failed` con el
 tipo de error, sin romper la carta ni la compra, y el reenvío crea un nuevo intento.
 
-Descargas: `GET /api/v1/letters/{id}/qr.png` y `/card.pdf` (dueño) y
-`GET /api/v1/public/letters/{slug}/qr.png` y `/card.pdf` (público). Todas fuerzan la
+Descargas: `GET /api/v1/letters/{id}/qr.png`, `/postal.png` y `/card.pdf` (dueño) y las
+tres equivalentes en `GET /api/v1/public/letters/{slug}/…` (público). `qr.png` devuelve la
+baldosa estilizada, que es también la que usa el frontend en su modal de éxito. Todas fuerzan la
 descarga con `Content-Disposition` (el `<a download>` del front no funciona entre
 orígenes) y las públicas se declaran cacheables un día: una carta publicada está
 congelada. La respuesta de la carta expone `cardUrl` junto a `qrUrl`.

@@ -60,10 +60,11 @@ from app.schemas.commerce import (
 )
 from app.services import dedications, deliveries, identity, letters, purchases, webhooks
 from app.services.cards import CardContent, card_name, render_card_pdf
+from app.services.first_phrase import first_phrase
 from app.services.letter_body import parse_body
 from app.services.mailer import Mailer
 from app.services.payments import PaymentGateway
-from app.services.qr import qr_png
+from app.services.postcard import PostcardContent, render_postcard, render_qr_tile
 from app.services.service_bus import (
     LETTER_MESSAGE_TYPE,
     LETTER_MESSAGE_VERSION,
@@ -273,27 +274,61 @@ class CommerceService:
 
     async def letter_qr(self, user: User, letter_id: uuid.UUID) -> BinaryContent:
         letter = await self._owned_letter(user, letter_id)
-        url = letters.public_url(self.settings, letter)
-        if not url:
-            raise ApiError(409, "LETTER_NOT_PUBLISHED", "Publica la carta para obtener su QR.")
-        return BinaryContent(qr_png(url), "image/png", f"qr-{letter.public_slug}.png")
+        return await self._tile(letter, self._published_url(letter, "su QR"))
 
     async def letter_card(self, user: User, letter_id: uuid.UUID) -> BinaryContent:
         """Tarjeta QR en PDF de la carta propia (la misma que viaja en el correo)."""
         letter = await self._owned_letter(user, letter_id)
+        return await self._card(letter, self._published_url(letter, "su tarjeta"))
+
+    async def letter_postcard(self, user: User, letter_id: uuid.UUID) -> BinaryContent:
+        """La postal en PNG: lo mismo que va dentro del PDF, sin la hoja alrededor."""
+        letter = await self._owned_letter(user, letter_id)
+        return await self._postcard(letter, self._published_url(letter, "su postal"))
+
+    def _published_url(self, letter: Letter, what: str) -> str:
         url = letters.public_url(self.settings, letter)
         if not url:
-            raise ApiError(409, "LETTER_NOT_PUBLISHED", "Publica la carta para obtener su tarjeta.")
-        return await self._card(letter, url)
+            raise ApiError(409, "LETTER_NOT_PUBLISHED", f"Publica la carta para obtener {what}.")
+        return url
+
+    def _postcard_content(self, letter: Letter, url: str) -> PostcardContent:
+        """Lo que la postal necesita. El remitente y la primera frase salen del cuerpo."""
+        parsed = parse_body(letter.body)
+        return PostcardContent(
+            recipient_name=letter.recipient_name,
+            sender_name=parsed.sender,
+            note=first_phrase(parsed.message),
+            public_url=url,
+            theme=letter.theme,
+        )
+
+    async def _tile(self, letter: Letter, url: str) -> BinaryContent:
+        """El código estilizado del tema. Es lo que enseña el correo y lo que pide el front."""
+        png = await to_thread.run_sync(
+            partial(render_qr_tile, letter.theme, url, deliveries.EMAIL_QR_WIDTH),
+            limiter=deliveries.card_limiter(),
+        )
+        return BinaryContent(png, "image/png", f"qr-{letter.public_slug}.png")
+
+    async def _postcard(self, letter: Letter, url: str) -> BinaryContent:
+        if not self.settings.letter_card_enabled:
+            raise ApiError(503, "LETTER_CARD_DISABLED", "La tarjeta QR está desactivada.")
+        png = await to_thread.run_sync(
+            partial(render_postcard, self._postcard_content(letter, url)),
+            limiter=deliveries.card_limiter(),
+        )
+        return BinaryContent(png, "image/png", f"postal-{letter.public_slug}.png")
 
     async def _card(self, letter: Letter, url: str) -> BinaryContent:
         if not self.settings.letter_card_enabled:
             raise ApiError(503, "LETTER_CARD_DISABLED", "La tarjeta QR está desactivada.")
-        parsed = parse_body(letter.body)
+        postcard = self._postcard_content(letter, url)
         content = CardContent(
             title=letter.title,
-            recipient_name=letter.recipient_name,
-            sender_name=parsed.sender,
+            recipient_name=postcard.recipient_name,
+            sender_name=postcard.sender_name,
+            note=postcard.note,
             public_url=url,
             theme=letter.theme,
             letter_id=str(letter.id),
@@ -378,9 +413,15 @@ class CommerceService:
         return BinaryContent(await self.storage.get(photo.storage_key), photo.content_type)
 
     async def public_qr(self, slug: str) -> BinaryContent:
+        """El código estilizado, sin sesión. Lo usan el correo y el modal del frontend."""
         letter = await self._published_letter(slug)
-        url = letters.public_url(self.settings, letter)
-        return BinaryContent(qr_png(url), "image/png", f"qr-{letter.public_slug}.png", FROZEN_CACHE)
+        tile = await self._tile(letter, letters.public_url(self.settings, letter))
+        return tile._replace(cache_control=FROZEN_CACHE)
+
+    async def public_postcard(self, slug: str) -> BinaryContent:
+        letter = await self._published_letter(slug)
+        postal = await self._postcard(letter, letters.public_url(self.settings, letter))
+        return postal._replace(cache_control=FROZEN_CACHE)
 
     async def public_card(self, slug: str) -> BinaryContent:
         """Tarjeta QR en PDF, sin sesión. Cuesta CPU: se declara cacheable."""

@@ -2,9 +2,10 @@
 
 Es el espejo en el servidor de lo que el frontend tiene repartido en
 ``src/modules/editor/types.ts`` (paletas), ``src/utils/themeDecor.ts`` (motivo, metal,
-trama y filo) y ``src/utils/qrTheme.ts`` (colores del QR). El backend no lo tenía: el
-campo ``theme`` es texto libre y el correo salía siempre rosa. Con esto la tarjeta PDF y
-el correo se pintan con el estilo que el comprador eligió y vio en la previsualización.
+trama y filo) y ``src/utils/qrTheme.ts`` (colores del QR y emblema alado). El backend no
+lo tenía: el campo ``theme`` es texto libre y el correo salía siempre rosa. Con esto la
+postal del correo y la del PDF se pintan con el estilo que el comprador eligió y vio en
+la previsualización.
 
 Los valores se copian tal cual, no se derivan: si el front cambia un color, se cambia
 aquí. Un slug desconocido cae en ``classic``, igual que hace ``themeFromSlug`` allí.
@@ -250,21 +251,77 @@ def qr_colors(palette: Palette) -> tuple[str, str]:
     return darken_until_contrast(raw, light, MIN_QR_CONTRAST), light
 
 
-# --- Trazos (port de themeDecor.ts y ornaments.ts) --------------------------------------
+# --- Trazos (port de themeDecor.ts y qrTheme.ts) ----------------------------------------
 
-# Trazados en una caja de 48×48. Los mismos del lacre, la filigrana y el centro del QR.
-MOTIF_PATHS: dict[str, str] = {
-    "heart": '<path d="M24 41C13.2 33.4 8 28.7 8 22.4 8 17.2 12.1 13 17.2 13c2.9 0 5.6 1.4 7.3 3.6C26.2 14.4 28.9 13 31.8 13 36.9 13 41 17.2 41 22.4 41 28.7 35.8 33.4 24 41Z"/>',
-    "petals": '<path d="M24 6c4 0 7 3.4 7 7.6 0 1.3-.3 2.5-.8 3.6 1-.6 2.2-1 3.5-1 4 0 7.3 3.4 7.3 7.6S37.7 31.4 33.7 31.4c-1.3 0-2.5-.4-3.5-1 .5 1.1.8 2.3.8 3.6C31 38.2 28 41.6 24 41.6s-7-3.4-7-7.6c0-1.3.3-2.5.8-3.6-1 .6-2.2 1-3.5 1-4 0-7.3-3.4-7.3-7.6s3.3-7.6 7.3-7.6c1.3 0 2.5.4 3.5 1-.5-1.1-.8-2.3-.8-3.6C17 9.4 20 6 24 6Z"/>',
-    "star": '<path d="M24 6l4.9 12.3L42 20.4l-9.5 8.9 2.5 13.1L24 36.1l-11 6.3 2.5-13.1L6 20.4l13.1-2.1Z"/>',
-    "sun": '<circle cx="24" cy="24" r="10"/><path d="M24 4v5M24 39v5M4 24h5M39 24h5M10 10l3.5 3.5M34.5 34.5 38 38M38 10l-3.5 3.5M13.5 34.5 10 38" stroke="currentColor" stroke-width="3" stroke-linecap="round"/>',
-    "sparkle": '<path d="M24 5c1.6 8.6 4.4 11.4 13 13-8.6 1.6-11.4 4.4-13 13-1.6-8.6-4.4-11.4-13-13 8.6-1.6 11.4-4.4 13-13Z"/><path d="M36.5 30c.8 4.3 2.2 5.7 6.5 6.5-4.3.8-5.7 2.2-6.5 6.5-.8-4.3-2.2-5.7-6.5-6.5 4.3-.8 5.7-2.2 6.5-6.5Z"/>',
-    "leaf": '<path d="M39 9C20 11 10 20 10 31c0 3 .8 5.6 2.2 7.6C16 30 23 23.5 33 20.5 24 25 17 32 14.5 41.5" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"/>',
-    "moon": '<path d="M34 10 C26 12 20 18 20 24 C20 30 26 36 34 38 C24 40 14 33 14 24 C14 15 24 8 34 10 Z"/>',
-    "butterfly": '<path d="M24 24c-3-5-10-7-14-2 0 5.5 3.6 10.6 8.9 10.6 3.5 0 5.1-3.4 5.1-8.6Zm0 0c3-5 10-7 14-2 0 5.5-3.6 10.6-8.9 10.6-3.5 0-5.1-3.4-5.1-8.6Z"/><path d="M24 21.5c-.7-4-2-7.5-3.6-9.5 2.4-.6 3.6.9 3.6 9.5Zm0 0c.7-4 2-7.5 3.6-9.5-2.4-.6-3.6.9-3.6 9.5Z"/>',
+
+@dataclass(frozen=True, slots=True)
+class Shape:
+    """Una pieza de un motivo: un trazado SVG o un círculo, relleno o de trazo.
+
+    Los motivos del frontend no son un ``<path>`` cada uno —el sol trae un círculo y ocho
+    rayos, la mariposa dos alas—, así que aquí van desmenuzados: el pintor necesita saber
+    qué se rellena y qué se traza, y con qué grosor.
+    """
+
+    path: str = ""
+    circle: tuple[float, float, float] | None = None
+    # 0 = relleno; mayor que 0 = trazo de ese grosor, en unidades de la caja de 48.
+    width: float = 0.0
+
+
+MOTIF_SHAPES: dict[str, tuple[Shape, ...]] = {
+    "heart": (
+        Shape(
+            "M24 41C13.2 33.4 8 28.7 8 22.4 8 17.2 12.1 13 17.2 13c2.9 0 5.6 1.4 7.3 3.6C26.2 14.4 28.9 13 31.8 13 36.9 13 41 17.2 41 22.4 41 28.7 35.8 33.4 24 41Z"
+        ),
+    ),
+    "petals": (
+        Shape(
+            "M24 6c4 0 7 3.4 7 7.6 0 1.3-.3 2.5-.8 3.6 1-.6 2.2-1 3.5-1 4 0 7.3 3.4 7.3 7.6S37.7 31.4 33.7 31.4c-1.3 0-2.5-.4-3.5-1 .5 1.1.8 2.3.8 3.6C31 38.2 28 41.6 24 41.6s-7-3.4-7-7.6c0-1.3.3-2.5.8-3.6-1 .6-2.2 1-3.5 1-4 0-7.3-3.4-7.3-7.6s3.3-7.6 7.3-7.6c1.3 0 2.5.4 3.5 1-.5-1.1-.8-2.3-.8-3.6C17 9.4 20 6 24 6Z"
+        ),
+    ),
+    "star": (
+        Shape("M24 6l4.9 12.3L42 20.4l-9.5 8.9 2.5 13.1L24 36.1l-11 6.3 2.5-13.1L6 20.4l13.1-2.1Z"),
+    ),
+    "sun": (
+        Shape(circle=(24.0, 24.0, 10.0)),
+        Shape(
+            "M24 4v5M24 39v5M4 24h5M39 24h5M10 10l3.5 3.5M34.5 34.5 38 38M38 10l-3.5 3.5M13.5 34.5 10 38",
+            width=3,
+        ),
+    ),
+    "sparkle": (
+        Shape(
+            "M24 5c1.6 8.6 4.4 11.4 13 13-8.6 1.6-11.4 4.4-13 13-1.6-8.6-4.4-11.4-13-13 8.6-1.6 11.4-4.4 13-13Z"
+        ),
+        Shape(
+            "M36.5 30c.8 4.3 2.2 5.7 6.5 6.5-4.3.8-5.7 2.2-6.5 6.5-.8-4.3-2.2-5.7-6.5-6.5 4.3-.8 5.7-2.2 6.5-6.5Z"
+        ),
+    ),
+    "leaf": (
+        Shape(
+            "M39 9C20 11 10 20 10 31c0 3 .8 5.6 2.2 7.6C16 30 23 23.5 33 20.5 24 25 17 32 14.5 41.5",
+            width=3,
+        ),
+    ),
+    "moon": (
+        Shape(
+            "M34 10 C26 12 20 18 20 24 C20 30 26 36 34 38 C24 40 14 33 14 24 C14 15 24 8 34 10 Z"
+        ),
+    ),
+    "butterfly": (
+        Shape(
+            "M24 24c-3-5-10-7-14-2 0 5.5 3.6 10.6 8.9 10.6 3.5 0 5.1-3.4 5.1-8.6Zm0 0c3-5 10-7 14-2 0 5.5-3.6 10.6-8.9 10.6-3.5 0-5.1-3.4-5.1-8.6Z"
+        ),
+        Shape(
+            "M24 21.5c-.7-4-2-7.5-3.6-9.5 2.4-.6 3.6.9 3.6 9.5Zm0 0c.7-4 2-7.5 3.6-9.5-2.4-.6-3.6.9-3.6 9.5Z"
+        ),
+    ),
 }
 
-# Caja cuadrada ajustada a cada trazado: (x, y, lado). Medida sobre los extremos reales.
+# Caja cuadrada ajustada a cada trazado: (x, y, lado). Medida sobre los extremos reales,
+# con holgura para el trazo: con la caja común de 48 la hoja y la mariposa se veían
+# diminutas y el corazón quedaba bajo, y en un emblema centrado eso canta.
 MOTIF_BOX: dict[str, tuple[float, float, float]] = {
     "heart": (6, 8.5, 37),
     "petals": (4.2, 4, 39.6),
@@ -276,42 +333,47 @@ MOTIF_BOX: dict[str, tuple[float, float, float]] = {
     "butterfly": (8, 6.24, 32),
 }
 
+
+def motif_transform(motif: str, size: float, cx: float, cy: float) -> tuple[float, float, float]:
+    """``(escala, dx, dy)`` que centra el motivo en ``(cx, cy)`` con el lado pedido."""
+    x, y, box = MOTIF_BOX[motif]
+    scale = size / box
+    return scale, cx - size / 2 - x * scale, cy - size / 2 - y * scale
+
+
+# --- Emblema alado del centro del QR ----------------------------------------------------
+
+# Caja del emblema: apaisada, no cuadrada.
+EMBLEM_WIDTH, EMBLEM_HEIGHT = 128.0, 72.0
+EMBLEM_RATIO = EMBLEM_HEIGHT / EMBLEM_WIDTH
+EMBLEM_RADIUS = 16.0
+# Lado del emblema como fracción del lado del QR. Con esto ocupa ~6,6 % del área, muy por
+# debajo del ~30 % que tolera la corrección de errores en nivel H.
+EMBLEM_SCALE = 0.34
+# Lado del motivo dentro del emblema y su centro, como en ``buildWingedCenterIcon``.
+EMBLEM_MOTIF = (32.0, 64.0, 35.0)
+
+EMBLEM_WINGS = (
+    "M52 36 C44 26 34 20 22 17 C26 23 31 27 38 30 C28 30 19 27 10 22 C13 29 20 35 30 37 C21 39 14 43 9 49 C22 50 38 45 52 38 Z",
+    "M76 36 C84 26 94 20 106 17 C102 23 97 27 90 30 C100 30 109 27 118 22 C115 29 108 35 98 37 C107 39 114 43 119 49 C106 50 90 45 76 38 Z",
+)
+EMBLEM_HIGHLIGHTS = (
+    "M52 36 C44 29 34 25 24 23 C29 27 36 31 44 33 Z",
+    "M76 36 C84 29 94 25 104 23 C99 27 92 31 84 33 Z",
+)
+EMBLEM_HIGHLIGHT_ALPHA = 0.3
+
 # Los motivos de trazo se dibujan con stroke; el resto van rellenos.
 STROKED_MOTIFS = frozenset({"leaf"})
 
 
-def motif_svg(motif: str, size: float, color: str) -> str:
-    """SVG suelto del motivo, listo para incrustar en el PDF.
+def metal_ink(palette: Palette) -> str:
+    """Color de los nombres: el metal del tema, legible sobre el papel.
 
-    fpdf2 no resuelve ``currentColor`` (lo trata como "heredar"), así que el color se
-    sustituye aquí. ``color`` siempre sale de la paleta: nunca del formulario.
+    El metal puro da ~2:1 contra un papel claro y los nombres se perdían, así que se
+    oscurece hasta 3:1 conservando el tono. En los temas oscuros el papel ya es oscuro y
+    no hace falta tocarlo.
     """
-    x, y, box = MOTIF_BOX[motif]
-    fill = "none" if motif in STROKED_MOTIFS else color
-    body = MOTIF_PATHS[motif].replace("currentColor", color)
-    return (
-        f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="{x} {y} {box} {box}" '
-        f'width="{size}" height="{size}"><g fill="{fill}">{body}</g></svg>'
-    )
-
-
-_CORNER_ANGLE = {"tl": 0, "tr": 90, "br": 180, "bl": 270}
-
-
-def corner_flourish_svg(color: str, size: float, corner: str) -> str:
-    """Enredadera de esquina, la misma del visor y del documento exportado."""
-    angle = _CORNER_ANGLE[corner]
-    rotate = f' transform="rotate({angle} 32 32)"' if angle else ""
-    return (
-        f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" '
-        f'width="{size}" height="{size}" fill="none"><g{rotate}>'
-        f'<path d="M2 40 C2 19 19 2 40 2" stroke="{color}" stroke-opacity="0.55" '
-        'stroke-width="1" stroke-linecap="round"/>'
-        f'<path d="M9 40 C9 23 23 9 40 9" stroke="{color}" stroke-opacity="0.3" '
-        'stroke-width="0.9" stroke-linecap="round"/>'
-        f'<path d="M20 14 C24 9 30 8 34 9 C31 14 25 16 20 14 Z" stroke="{color}" '
-        'stroke-opacity="0.45" stroke-width="0.9" stroke-linejoin="round"/>'
-        f'<circle cx="40" cy="2" r="1.4" fill="{color}" fill-opacity="0.5"/>'
-        f'<circle cx="2" cy="40" r="1.4" fill="{color}" fill-opacity="0.5"/>'
-        "</g></svg>"
-    )
+    if palette.dark:
+        return palette.metal
+    return darken_until_contrast(palette.metal, palette.card_bg, 3)
