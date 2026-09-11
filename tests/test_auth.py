@@ -6,10 +6,23 @@ import httpx
 import pytest
 from sqlalchemy import select, update
 
+from app import legal
 from app.core.errors import ApiError
 from app.models.user import AuthSession, User
 
-ACCOUNT = {"email": "buyer@example.com", "password": "pw-buyer1", "name": "Buyer 💌"}
+# El alta exige documento y consentimiento; ver tests/test_registration_compliance.py.
+ACCOUNT = {
+    "email": "buyer@example.com",
+    "password": "pw-buyer1",
+    "name": "Buyer 💌",
+    "documentType": 13,
+    "documentNumber": "1012345678",
+    "acceptedTermsVersion": legal.TERMS_VERSION,
+}
+
+# Google queda apagado hasta que exista la pantalla de completar datos: crearía
+# cuentas sin documento ni consentimiento. Los casos NO se borran, se omiten.
+GOOGLE_OFF = pytest.mark.skip(reason="Google apagado hasta que exista pantalla de completar datos")
 
 
 async def test_concurrent_registration_has_one_account(client, app):
@@ -21,6 +34,7 @@ async def test_concurrent_registration_has_one_account(client, app):
         assert len((await db.scalars(select(User))).all()) == 1
 
 
+@GOOGLE_OFF
 async def test_concurrent_google_first_login_has_one_identity(client, app):
     setup_google(app)
     results = await asyncio.gather(
@@ -76,12 +90,16 @@ async def test_duplicate_email_casefold(client):
         {"name": "   "},
         {"name": "x" * 121},
         {"password": "x" * 11},
+        {"documentType": 99},
+        {"documentNumber": "12AB5678"},
+        {"acceptedTermsVersion": ""},
     ],
 )
 async def test_register_validation_never_echoes_input(client, changes):
     response = await client.post("/api/v1/auth/register", json={**ACCOUNT, **changes})
     assert response.status_code == 422
     assert ACCOUNT["password"] not in response.text
+    assert ACCOUNT["documentNumber"] not in response.text
     assert response.json()["code"] == "VALIDATION_ERROR"
     assert response.json()["requestId"] == response.headers["x-request-id"]
 
@@ -176,6 +194,21 @@ async def test_google_not_configured(client):
     assert result.json()["code"] == "GOOGLE_NOT_CONFIGURED"
 
 
+async def test_google_stays_off_even_when_configured(client, app):
+    """Con cliente y verificador puestos sigue cerrada: no es un fallo de config.
+
+    Es la guarda del agujero legal. Mientras esta puerta no pida documento ni
+    consentimiento, un token de Google no puede crear una cuenta.
+    """
+    setup_google(app)
+    result = await client.post("/api/v1/auth/google", json={"credential": "mocked"})
+    assert result.status_code == 503
+    assert result.json()["code"] == "GOOGLE_NOT_CONFIGURED"
+    app.state.google_verifier.verify.assert_not_called()
+    async with app.state.sessions() as db:
+        assert (await db.scalars(select(User))).all() == []
+
+
 def setup_google(app, claims=None):
     app.state.settings.google_client_id = "test-client"
     app.state.google_verifier.verify = Mock(
@@ -189,6 +222,7 @@ def setup_google(app, claims=None):
     )
 
 
+@GOOGLE_OFF
 async def test_google_first_and_returning_login(client, app):
     setup_google(app)
     first = await client.post("/api/v1/auth/google", json={"credential": "mocked-token"})
@@ -202,6 +236,7 @@ async def test_google_first_and_returning_login(client, app):
     assert (await client.get("/api/v1/me")).status_code == 200
 
 
+@GOOGLE_OFF
 async def test_google_never_auto_links_email(client, app):
     await client.post("/api/v1/auth/register", json=ACCOUNT)
     setup_google(app, {"sub": "new-google", "email": ACCOUNT["email"], "email_verified": True})
@@ -210,6 +245,7 @@ async def test_google_never_auto_links_email(client, app):
     assert response.json()["code"] == "ACCOUNT_LINK_REQUIRED"
 
 
+@GOOGLE_OFF
 async def test_google_invalid_and_unavailable(client, app):
     setup_google(app)
     app.state.google_verifier.verify.side_effect = ApiError(401, "INVALID_GOOGLE_TOKEN", "Invalid")
@@ -224,6 +260,7 @@ async def test_google_invalid_and_unavailable(client, app):
     ).status_code == 503
 
 
+@GOOGLE_OFF
 async def test_google_disabled_user(client, app):
     setup_google(app)
     await client.post("/api/v1/auth/google", json={"credential": "mocked"})
@@ -235,6 +272,7 @@ async def test_google_disabled_user(client, app):
     ).status_code == 401
 
 
+@GOOGLE_OFF
 async def test_google_account_cannot_login_with_password(client, app):
     setup_google(app)
     await client.post("/api/v1/auth/google", json={"credential": "mocked"})

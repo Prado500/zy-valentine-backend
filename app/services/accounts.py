@@ -70,7 +70,21 @@ class AccountService:
         return await auth.login(self.db, payload, self.hash_limiter)
 
     async def google_login(self, payload: GoogleLogin, nonce: str) -> User:
-        """Inicio de sesión con Google. Sin cliente configurado, 503 explícito."""
+        """Apagado a propósito mientras el alta sea un acto legal.
+
+        Esta puerta crea cuentas a partir de un token de Google, sin documento ni
+        consentimiento: justo el agujero que este cambio viene a cerrar. Se reabrirá
+        cuando exista la pantalla de completar datos.
+
+        Se reutiliza el código ``GOOGLE_NOT_CONFIGURED`` que ya existía para el caso
+        "sin cliente configurado": el contrato de la API no cambia y ningún cliente
+        se entera. Hoy no lo llama nadie (``grep -rn "auth/google" fe/src`` no
+        devuelve nada).
+        """
+        raise ApiError(503, "GOOGLE_NOT_CONFIGURED", "Google todavía no está configurado.")
+
+    async def _google_login_disabled(self, payload: GoogleLogin, nonce: str) -> User:
+        """Implementación conservada para cuando Google se reabra. No se llama."""
         if not self.settings.google_client_id:
             raise ApiError(503, "GOOGLE_NOT_CONFIGURED", "Google todavía no está configurado.")
         claims = await to_thread.run_sync(
