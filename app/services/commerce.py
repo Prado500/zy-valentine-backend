@@ -283,9 +283,7 @@ class CommerceService:
         letter = await self._owned_letter(user, letter_id)
         url = letters.public_url(self.settings, letter)
         if not url:
-            raise ApiError(
-                409, "LETTER_NOT_PUBLISHED", "Publica la carta para obtener su tarjeta."
-            )
+            raise ApiError(409, "LETTER_NOT_PUBLISHED", "Publica la carta para obtener su tarjeta.")
         return await self._card(letter, url)
 
     async def _card(self, letter: Letter, url: str) -> BinaryContent:

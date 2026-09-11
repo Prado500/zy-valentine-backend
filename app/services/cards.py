@@ -251,7 +251,9 @@ def _draw_sheet(canvas: _Canvas) -> None:
         canvas.svg(corner_flourish_svg(palette.metal, 16, corner), x, y, 16, 16)
 
 
-def _hatch(canvas: _Canvas, angle: float, spacing: float, box: tuple[float, float, float, float]) -> None:
+def _hatch(
+    canvas: _Canvas, angle: float, spacing: float, box: tuple[float, float, float, float]
+) -> None:
     """Líneas paralelas con la inclinación pedida, recortadas a ``box``."""
     x0, y0, x1, y1 = box
     direction = (math.cos(math.radians(angle)), math.sin(math.radians(angle)))
@@ -342,7 +344,13 @@ def _draw_footer(canvas: _Canvas, content: CardContent) -> None:
     canvas.ink(palette.accent)
     brand_width = canvas.width(BRAND)
     canvas.text(BRAND, TEXT_X, FOOTER_Y, brand_width + 1, 6, align="L")
-    canvas.svg(motif_svg("heart", 3.2, palette.accent), TEXT_X + brand_width + 1.5, FOOTER_Y + 1.5, 3.2, 3.2)
+    canvas.svg(
+        motif_svg("heart", 3.2, palette.accent),
+        TEXT_X + brand_width + 1.5,
+        FOOTER_Y + 1.5,
+        3.2,
+        3.2,
+    )
     canvas.font("bevietnam", 5.5)
     canvas.ink(canvas.muted)
     stamp = printable(f"Carta {content.letter_id} · versión {content.version}", limit=80)
@@ -440,7 +448,9 @@ def _draw_link(canvas: _Canvas, url: str) -> None:
     canvas.paragraph(lines, TEXT_X, 170.5, TEXT_WIDTH, 3.6)
 
 
-def _draw_card_page(canvas: _Canvas, content: CardContent, sender: str | None, recipient: str, title: str, url: str) -> None:
+def _draw_card_page(
+    canvas: _Canvas, content: CardContent, sender: str | None, recipient: str, title: str, url: str
+) -> None:
     canvas.pdf.add_page()
     _draw_sheet(canvas)
     _draw_ornament(canvas, 26.0)
