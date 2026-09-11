@@ -109,6 +109,7 @@ os.environ["APP_ENV"] = "local"
 os.environ["DB_SSL_MODE"] = "disable"
 os.environ["SESSION_SECRET"] = "test-only-secret-000000000000000000000"
 os.environ["LOCAL_STORAGE_DIR"] = tempfile.mkdtemp(prefix="zy-storage-")
+from app import legal  # noqa: E402
 from app.core.config import Settings  # noqa: E402
 from app.main import EXPECTED_REVISION, create_app  # noqa: E402
 
@@ -276,10 +277,16 @@ def gateway(app):
     return fake
 
 
+# El alta es un acto legal: sin documento ni versión de términos aceptada, el
+# backend responde 422. Cada cuenta necesita ADEMÁS su propio número de
+# documento: la unicidad es global, no por correo.
 BUYER = {
     "email": "comprador@example.com",
     "password": "pw-buyer1",
     "name": "Comprador",
+    "documentType": 13,
+    "documentNumber": "1098765432",
+    "acceptedTermsVersion": legal.TERMS_VERSION,
 }
 
 

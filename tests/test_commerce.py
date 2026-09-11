@@ -204,7 +204,10 @@ async def test_letter_of_another_user_is_invisible(client, paid_purchase, app):
     ) as other:
         token = (await other.get("/api/v1/auth/csrf")).json()["csrfToken"]
         other.headers["X-CSRF-Token"] = token
-        await other.post("/api/v1/auth/register", json={**BUYER, "email": "otra@example.com"})
+        await other.post(
+            "/api/v1/auth/register",
+            json={**BUYER, "email": "otra@example.com", "documentNumber": "1055500001"},
+        )
         await other.post(
             "/api/v1/auth/login", json={"email": "otra@example.com", "password": BUYER["password"]}
         )
@@ -486,11 +489,11 @@ async def test_cannot_send_unpublished_letter(client, paid_purchase):
 
 
 async def test_document_is_private_and_never_public(client, paid_purchase, app):
-    document = {"documentType": "CC", "documentNumber": "1098765432"}
+    document = {"documentType": 13, "documentNumber": "1098765432"}
     saved = await client.put("/api/v1/me/identity-document", json=document)
     assert saved.status_code == 200
     assert saved.json() == {
-        "documentType": "CC",
+        "documentType": 13,
         "documentLast4": "5432",
         "createdAt": saved.json()["createdAt"],
     }
@@ -509,13 +512,18 @@ async def test_document_is_private_and_never_public(client, paid_purchase, app):
 
 
 async def test_document_cannot_be_reused_by_another_account(client, buyer, app):
-    document = {"documentType": "CC", "documentNumber": "1098765432"}
+    document = {"documentType": 13, "documentNumber": "1098765432"}
     assert (await client.put("/api/v1/me/identity-document", json=document)).status_code == 200
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://testserver"
     ) as other:
         other.headers["X-CSRF-Token"] = (await other.get("/api/v1/auth/csrf")).json()["csrfToken"]
-        await other.post("/api/v1/auth/register", json={**BUYER, "email": "otra@example.com"})
+        # Cuenta propia con documento propio; el conflicto se provoca DESPUÉS, al
+        # intentar quedarse con el documento del primer comprador.
+        await other.post(
+            "/api/v1/auth/register",
+            json={**BUYER, "email": "otra@example.com", "documentNumber": "1055500002"},
+        )
         await other.post(
             "/api/v1/auth/login", json={"email": "otra@example.com", "password": BUYER["password"]}
         )
@@ -527,7 +535,7 @@ async def test_document_cannot_be_reused_by_another_account(client, buyer, app):
 async def test_document_is_not_a_credential(client, buyer):
     """La cédula no inicia sesión ni sustituye la contraseña."""
     await client.put(
-        "/api/v1/me/identity-document", json={"documentType": "CC", "documentNumber": "1098765432"}
+        "/api/v1/me/identity-document", json={"documentType": 13, "documentNumber": "1098765432"}
     )
     response = await client.post(
         "/api/v1/auth/login", json={"email": BUYER["email"], "password": "1098765432"}
