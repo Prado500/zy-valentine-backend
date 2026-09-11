@@ -96,6 +96,7 @@ la rama `main` corresponde a `APP_ENV=production`, y no se infiere desde git.
 | `AUTH_RATE_LIMIT` / `AUTH_RATE_WINDOW` | 30 / 60 | igual | Límite **por proceso**, no distribuido |
 | `GOOGLE_CLIENT_ID` | opcional | Cliente web de Google | Vacío ⇒ `/auth/google` responde 503 `GOOGLE_NOT_CONFIGURED` |
 | `PII_HMAC_KEY` | Generada local | Secreto propio | HMAC de la cédula; si falta deriva de `SESSION_SECRET`. Rotarla invalida los documentos ya guardados |
+| `PII_ENCRYPTION_KEY` | Generada local | Secreto propio | Clave AES-256 del número de documento (32+ caracteres). Si falta deriva de `SESSION_SECRET`. **Fíjala explícitamente en staging y production:** rotar `SESSION_SECRET` sin haberla fijado antes deja **ilegibles** los números ya cifrados, y sin ellos no se puede facturar ante la DIAN |
 | `PAYMENT_PROVIDER` | `none` | `mercadopago` | `none` ⇒ verificación y webhook responden 503 explícito |
 | `MERCADOPAGO_ACCESS_TOKEN` | vacío | Secreto | Obligatorio si el proveedor es `mercadopago` |
 | `MERCADOPAGO_WEBHOOK_SECRET` | vacío | Secreto | Obligatorio: sin firma válida no se procesa ningún webhook |
@@ -212,7 +213,7 @@ explica cómo generarla, en vez de una traza de pydantic.
 Opcionales según se activen: `MAIL_BACKEND=smtp` con `MAIL_USERNAME`/`MAIL_PASSWORD`,
 `PAYMENT_PROVIDER=mercadopago` con `MERCADOPAGO_ACCESS_TOKEN` y
 `MERCADOPAGO_WEBHOOK_SECRET`, `PURCHASE_AMOUNT_CENTS`, `GOOGLE_CLIENT_ID` y
-`PII_HMAC_KEY`. Cada una exige sus propios secretos: si se activa a medias, el arranque
+`PII_HMAC_KEY` y `PII_ENCRYPTION_KEY`. Cada una exige sus propios secretos: si se activa a medias, el arranque
 falla diciendo cuál falta.
 
 Genera cada `SESSION_SECRET` sin imprimirlo en un chat ni en un ticket:

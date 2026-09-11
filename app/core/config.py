@@ -49,6 +49,12 @@ CONFIG_HELP = {
         "AZURE_SERVICE_BUS_CONNECTION_STRING; si falta una de las dos, la API degrada "
         "a escritura síncrona sin fallar el arranque."
     ),
+    "pii_encryption_key": (
+        "Clave AES-256 del número de documento: 32 caracteres o más. OPCIONAL, pero "
+        "fíjala en staging y production antes del primer registro: si falta se deriva "
+        "de SESSION_SECRET, y rotar ese secreto dejaría ilegibles los números ya "
+        "cifrados, que son los que exige la factura electrónica de la DIAN."
+    ),
     "storage_backend": (
         "En entornos remotos debe ser 'azure' con AZURE_STORAGE_CONNECTION_STRING y "
         "AZURE_CONTAINER_NAME: el disco del App Service no es durable."
