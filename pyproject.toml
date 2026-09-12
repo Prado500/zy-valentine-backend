@@ -4,34 +4,42 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "zy-valentine-backend"
-version = "0.1.0"
+version = "0.3.0"
 description = "API RESTful asíncrona para la gestión de cartas para san valentín"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
-    "fastapi",
-    "uvicorn[standard]",
-    "sqlalchemy",
-    "asyncpg",
-    "alembic",
-    "pydantic[email]",
-    "pydantic-settings",
-    "python-multipart",
-    "bcrypt",
-    "pyjwt",
-    "python-dotenv",
-    "fastapi-mail>=1.4.1",
-    "azure-storage-blob[aio]",
-    "aiohttp"
-
+    "fastapi>=0.115,<1",
+    "uvicorn>=0.30,<1",
+    "sqlalchemy>=2.0,<2.1",
+    "asyncpg>=0.29,<1",
+    "alembic>=1.13,<2",
+    "pydantic[email]>=2.8,<3",
+    "pydantic-settings>=2.4,<3",
+    "pwdlib[argon2]>=0.2,<1",
+    "itsdangerous>=2.2,<3",
+    "google-auth>=2.35,<3",
+    "requests>=2.32,<3",
+    "cachecontrol>=0.14,<1",
+    "httpx>=0.28,<1",
+    "segno>=1.6,<2",
+    "python-multipart>=0.0.9,<1",
+    "fpdf2>=2.8.8,<3",
+    "cryptography>=43,<51"
 ]
 
 [project.optional-dependencies]
+azure = [
+    "azure-storage-blob>=12.20,<13",
+    "azure-servicebus>=7.12,<8",
+]
+
 test = [
     "pytest>=8.4.1",
     "pytest-asyncio>=0.25.0",
+    "pytest-mock>=3.14,<4",
     "httpx>=0.28.1",
-    "aiosqlite"
+    "ruff>=0.12,<1"
 ]
 
 [tool.pytest.ini_options]
@@ -43,3 +51,25 @@ asyncio_default_fixture_loop_scope = "function"
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["app*"]
+
+# Fuentes de la tarjeta QR (app/assets/fonts). Sin esta línea una instalación no
+# editable dejaría el paquete sin los .ttf y el PDF fallaría solo en producción.
+[tool.setuptools.package-data]
+"app.assets.fonts" = ["*.ttf", "*.txt", "*.md"]
+"app.assets.flowers" = ["*.md", "tema */*.webp"]
+# Texto legal que sirve la API y cuyo checksum firma cada consentimiento.
+"app.legal" = ["*.md"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.format]
+# La documentación lleva fragmentos de Python alineados a mano para que se lean
+# como una explicación, no como código de producción. El formateador los
+# desalinearía sin que nadie gane nada: aquí manda el autor, no la herramienta.
+exclude = ["*.md"]
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I", "UP", "B"]
+ignore = ["B008"] # FastAPI dependency declarations intentionally use Depends().

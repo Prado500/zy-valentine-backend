@@ -1,0 +1,9 @@
+IOP #1 -> PERSONA da clic en pagar ahora en el FE y se abre formulario de registro (envio registro cliente  a bd = 1 IOP)
+IOP # 2 -> CLIENTE LLENA FORMULARIO DE MERCADO PAGO, Y DA CLIC EN PAGAR (backend mercado pago envia payload con transaction id y etc = 1 IOP)
+IOP #3 -> FE es redirijido por la api de mercado pago y solicita al BE verificar el estado de la transaccion como "COMPLETADA  " O "paga" = 1 IOP
+IOP #4 -> CLIENTE visualiza y llena formulario final de su carta, y le da clic a "enviar" o "crer mi carta". (FE envia payload de creacion de la crata al backend = 1 IOP)
+IOP #5 -> BE verifica que ese token (que el cliente en ese momento) no tenga o no pueda tener mas de 1 compra para evitar que un cliente pague 1 vez y se cree "paquetes infinitos a muchas novias" = 1IOP.
+IOP #6 -> BE escribe en la bd en la tabla "products" o "dedications" la info de esa carta para ese cliente que ya se verifico que no este "intentando tarmpear" = 1IOP
+IOP  #7 -> BE genera plantilla html, genera codigo qr (es decir, debe consultar la info de la carta en la bd) y envia al correo del cliente el producto (codigo qr, link a la carta, etc).
+
+info adicional: se trabaja con una instancia bb1 ms de 2048 MB de rRAM, 1136 MB de ram disponible para  conexiones (cada conexion pesa aprox 14 MB), pero limitada a 35 conexiones y para evitar context swithcing ya que tiene 1Vc, se dejo establecido 20 conexiones, cada una procesando de a 12 peticiones, para trabajar a la par con la capacidad de iops que maneja el disc de 64 GiB de la instancia (240 iops). universo maximo de concurrencia: 8190 ususarios (limite impuesto por load balancer)
