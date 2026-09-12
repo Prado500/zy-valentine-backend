@@ -122,7 +122,16 @@ En los tres últimos el dinero sale y el sistema no se entera.
 
 **Parte de configuración** (sin código): URL completa
 `https://<app>/api/v1/webhooks/mercadopago`, evento **Pagos** (`payment`) y el secreto de la
-aplicación en `MERCADOPAGO_WEBHOOK_SECRET`.
+aplicación en `MERCADOPAGO_WEBHOOK_SECRET`. Hay **un secreto para pruebas y otro para
+producción**, y no se rota al guardar cambios de configuración: el que ya está en las
+variables sigue siendo válido.
+
+**Parte de código, resuelta.** Al arreglar la URL apareció un segundo fallo que la tapaba:
+`MercadoPagoGateway.verify_webhook` leía el `data.id` de una cabecera `x-data-id` que Mercado
+Pago no envía nunca, así que el manifiesto salía mal y **todas** las notificaciones se
+rechazaban con 401. Corregido en la rama `feat/webhook-signature-data-id`, con 13 pruebas
+sobre una validación que tenía cobertura cero. Los dos fallos se tapaban entre sí: con la URL
+mal, ese código nunca se ejecutaba, así que nadie vio que también estaba mal.
 
 **Parte de código, pendiente:** no hay ninguna alerta ni métrica sobre compras que quedan en
 `pending` con un pago aprobado en Mercado Pago. Una tarea periódica que reconcilie —o al
