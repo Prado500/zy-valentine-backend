@@ -147,6 +147,6 @@ async def test_the_webhook_of_the_lab_provider_says_so_in_the_log(lab, caplog):
     import logging
 
     with caplog.at_level(logging.WARNING):
-        lab.verify_webhook(b"{}", {})
+        lab.verify_webhook(b"{}", {}, "900001")
 
     assert any("laboratorio" in record.message for record in caplog.records)

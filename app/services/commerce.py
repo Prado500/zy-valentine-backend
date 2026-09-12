@@ -173,10 +173,15 @@ class CommerceService:
     async def handle_webhook(
         self, body: bytes, headers: dict[str, str], query_id: str | None
     ) -> str:
-        """Verifica la firma **antes** de tocar la base de datos y aplica el evento."""
+        """Verifica la firma **antes** de tocar la base de datos y aplica el evento.
+
+        ``query_id`` es el ``data.id`` de la URL de notificación, y entra en el
+        manifiesto que se firma: sin él la validación no puede distinguir una
+        notificación legítima de otra firmada para un pago distinto.
+        """
         if len(body) > 64_000:
             raise ApiError(413, "PAYLOAD_TOO_LARGE", "Notificación demasiado grande.")
-        self.payments.verify_webhook(body, headers)
+        self.payments.verify_webhook(body, headers, query_id)
         payload = webhooks.decode(body)
         return await webhooks.handle(self.db, self.payments, payload, query_id)
 
