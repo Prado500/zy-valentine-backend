@@ -45,7 +45,16 @@ class PaymentGateway:
         """Devuelve (preference_id, checkout_url); sin proveedor devuelve (None, None)."""
         return None, None
 
-    def verify_webhook(self, body: bytes, headers: dict[str, str]) -> None:  # pragma: no cover
+    def verify_webhook(
+        self, body: bytes, headers: dict[str, str], data_id: str | None
+    ) -> None:  # pragma: no cover - puerto
+        """Valida que la notificación venga del proveedor. Sin firma válida, nada.
+
+        ``data_id`` es el identificador del recurso tal como llega en la *query
+        string* de la URL de notificación. Viaja como parámetro explícito porque no
+        es una cabecera: el proveedor no envía ninguna, y el puerto no puede recibir
+        el objeto ``Request`` sin acoplar esta capa a FastAPI.
+        """
         raise NotImplementedError
 
     async def aclose(self) -> None:  # pragma: no cover - puerto
@@ -60,7 +69,7 @@ class UnconfiguredGateway(PaymentGateway):
     async def fetch_payment(self, payment_id: str) -> PaymentSnapshot:
         raise ApiError(503, "PAYMENTS_NOT_CONFIGURED", "El proveedor de pagos no está configurado.")
 
-    def verify_webhook(self, body: bytes, headers: dict[str, str]) -> None:
+    def verify_webhook(self, body: bytes, headers: dict[str, str], data_id: str | None) -> None:
         raise ApiError(503, "PAYMENTS_NOT_CONFIGURED", "El proveedor de pagos no está configurado.")
 
 
@@ -129,17 +138,28 @@ class MercadoPagoGateway(PaymentGateway):
             str(data.get("init_point"))[:512] if data.get("init_point") else None,
         )
 
-    def verify_webhook(self, body: bytes, headers: dict[str, str]) -> None:
-        """Valida la firma HMAC del webhook. Sin firma válida no se procesa nada."""
+    def verify_webhook(self, body: bytes, headers: dict[str, str], data_id: str | None) -> None:
+        """Valida la firma HMAC del webhook. Sin firma válida no se procesa nada.
+
+        El manifiesto que firma Mercado Pago es
+        ``id:<data.id>;request-id:<x-request-id>;ts:<ts>;``, y su ``data.id`` sale de
+        la **query de la URL de notificación**, no de una cabecera: Mercado Pago no
+        envía ninguna ``x-data-id``. Leerlo de una cabecera dejaba el identificador
+        siempre vacío, el manifiesto siempre mal y **todas** las notificaciones
+        rechazadas con 401; de paso, permitía que el emisor eligiera qué se firmaba.
+
+        El identificador se pasa a minúsculas porque así lo exige la especificación
+        cuando es alfanumérico. Para un id de pago, que siempre es numérico, la
+        conversión no cambia nada.
+        """
         secret = self.settings.mercadopago_webhook_secret.get_secret_value().encode()
         signature = headers.get("x-signature", "")
         request_id = headers.get("x-request-id", "")
         parts = dict(piece.strip().split("=", 1) for piece in signature.split(",") if "=" in piece)
         timestamp, received = parts.get("ts", ""), parts.get("v1", "")
-        data_id = headers.get("x-data-id", "")
         if not timestamp or not received:
             raise ApiError(401, "WEBHOOK_SIGNATURE_INVALID", "Firma de webhook ausente.")
-        manifest = f"id:{data_id};request-id:{request_id};ts:{timestamp};"
+        manifest = f"id:{(data_id or '').lower()};request-id:{request_id};ts:{timestamp};"
         expected = hmac.new(secret, manifest.encode(), hashlib.sha256).hexdigest()
         if not hmac.compare_digest(expected, received):
             raise ApiError(401, "WEBHOOK_SIGNATURE_INVALID", "Firma de webhook inválida.")
@@ -208,7 +228,7 @@ class LabGateway(PaymentGateway):
         # Sin checkout externo: el frontend se queda en su botón de simulación.
         return f"lab-{reference}", None
 
-    def verify_webhook(self, body: bytes, headers: dict[str, str]) -> None:
+    def verify_webhook(self, body: bytes, headers: dict[str, str], data_id: str | None) -> None:
         """Acepta el webhook sin firma. Solo alcanzable con APP_ENV=local."""
         LOG.warning("Webhook aceptado sin firma: proveedor de laboratorio (APP_ENV=local)")
 

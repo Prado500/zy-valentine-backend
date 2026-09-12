@@ -215,6 +215,10 @@ class FakeGateway(PaymentGateway):
         self.snapshots: dict[str, PaymentSnapshot] = {}
         self.calls: list[str] = []
         self.accept_signature = True
+        # `data.id` que recibió la validación de firma. Permite comprobar que el
+        # router lo saca de la query y lo entrega hasta el puerto, que es justo la
+        # cadena que estaba rota.
+        self.signed_data_ids: list[str | None] = []
 
     def approve(self, payment_id: str, reference: str, amount_cents: int, currency: str = "COP"):
         self.snapshots[payment_id] = PaymentSnapshot(
@@ -245,7 +249,8 @@ class FakeGateway(PaymentGateway):
             raise ApiError(404, "PAYMENT_NOT_FOUND", "El pago no existe para esta cuenta.")
         return self.snapshots[payment_id]
 
-    def verify_webhook(self, body: bytes, headers: dict[str, str]) -> None:
+    def verify_webhook(self, body: bytes, headers: dict[str, str], data_id: str | None) -> None:
+        self.signed_data_ids.append(data_id)
         if not self.accept_signature or headers.get("x-signature") != "valid":
             raise ApiError(401, "WEBHOOK_SIGNATURE_INVALID", "Firma de webhook inválida.")
 

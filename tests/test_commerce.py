@@ -126,8 +126,13 @@ async def test_payments_not_configured_returns_503(client, buyer):
 
 
 async def send_webhook(client, event_id, payment_id, signature="valid"):
+    """Notificación con la forma exacta que envía Mercado Pago.
+
+    El `?data.id=` de la query no es decorativo: es el valor que entra en el
+    manifiesto que se firma, así que las pruebas lo mandan igual que el proveedor.
+    """
     return await client.post(
-        "/api/v1/webhooks/mercadopago",
+        f"/api/v1/webhooks/mercadopago?data.id={payment_id}",
         json={"id": event_id, "action": "payment.updated", "data": {"id": payment_id}},
         headers={"x-signature": signature},
     )
@@ -136,6 +141,21 @@ async def send_webhook(client, event_id, payment_id, signature="valid"):
 async def test_webhook_requires_signature(client, gateway, buyer):
     response = await send_webhook(client, 1, "900010", signature="forged")
     assert response.status_code == 401
+
+
+async def test_webhook_signature_receives_the_query_data_id(client, gateway, buyer):
+    """El `data.id` de la query tiene que llegar hasta la validación de firma.
+
+    Es la cadena que estaba rota: el router lo extraía y `handle_webhook` lo
+    recibía, pero nunca se lo pasaba a `verify_webhook`, que lo buscaba en una
+    cabecera `x-data-id` que Mercado Pago no envía. Resultado: manifiesto siempre
+    incompleto y todas las notificaciones rechazadas con 401.
+    """
+    purchase = await new_purchase(client)
+    gateway.approve("900019", purchase["externalReference"], purchase["amountCents"])
+    response = await send_webhook(client, 119, "900019")
+    assert response.json()["result"] == "applied"
+    assert gateway.signed_data_ids == ["900019"]
 
 
 async def test_repeated_webhook_is_processed_once(client, gateway, buyer):
