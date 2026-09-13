@@ -1,16 +1,26 @@
 """El texto legal es una fuente de verdad única, verificable y pública."""
 
 import hashlib
+import re
 
 import httpx
 
 from app import legal
+
+# El documento aprobado por negocio, fijado a propósito: cambiar un texto legal tiene que
+# ser un acto deliberado, no el efecto colateral de editar un .md.
+APPROVED_CHECKSUM = "c9a421396b362b763eb3bc6c2570d50437b37694a83e5643b35d17e4b28dc861"
 
 
 def test_checksum_matches_the_served_text():
     expected = hashlib.sha256(legal.TERMS_TEXT.encode("utf-8")).hexdigest()
     assert legal.TERMS_CHECKSUM == expected
     assert len(legal.TERMS_CHECKSUM) == 64
+
+
+def test_the_served_text_is_the_one_the_business_approved():
+    """Byte a byte, el mismo documento que publican ``/terminos`` y ``/privacidad``."""
+    assert legal.TERMS_CHECKSUM == APPROVED_CHECKSUM
 
 
 def test_text_is_normalized_so_the_checksum_is_platform_independent():
@@ -22,7 +32,20 @@ def test_text_is_normalized_so_the_checksum_is_platform_independent():
 def test_the_two_critical_clauses_are_present():
     lowered = legal.TERMS_TEXT.lower()
     assert "fotograf" in lowered
-    assert "carta html" in lowered
+    assert "archivo html" in lowered  # el v1.1 nombra así el entregable
+
+
+def test_no_template_placeholder_survives_in_the_served_text():
+    """Nadie puede firmar un documento con ``[[RAZÓN SOCIAL]]`` sin rellenar."""
+    leftovers = re.findall(r"\[\[[^\]]+\]\]", legal.TERMS_TEXT)
+    assert leftovers == [], leftovers
+
+
+def test_the_document_carries_both_terms_and_privacy():
+    """``TERMS_KIND`` promete los dos: servir solo uno sería un consentimiento a medias."""
+    assert "# TÉRMINOS Y CONDICIONES DE SERVICIO" in legal.TERMS_TEXT
+    assert "# POLÍTICA DE TRATAMIENTO DE DATOS PERSONALES Y PRIVACIDAD" in legal.TERMS_TEXT
+    assert legal.TERMS_TEXT.count(f"**Versión:** {legal.TERMS_VERSION}") == 2
 
 
 def test_version_is_declared_and_matches_the_text():
