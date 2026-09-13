@@ -10,6 +10,10 @@ wheels/
 # Virtual environments
 venv/
 .venv/
+.local-validation/
+.pytest_cache/
+.ruff_cache/
+postman/local-results.json
 
 # Environment variables
 .env
@@ -17,3 +21,10 @@ venv/
 # IDE-related directories and files
 .idea/
 .vscode/
+
+#Docs
+Iops.md
+docs/AZURECONF.md
+
+#Scripts
+scripts/

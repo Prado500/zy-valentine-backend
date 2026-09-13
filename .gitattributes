@@ -1,0 +1,7 @@
+# Los scripts de shell viajan al contenedor Linux: un `#!/bin/sh\r` no se ejecuta.
+# Sin esta regla, `core.autocrlf=true` deja CRLF en el árbol de trabajo de Windows y
+# el `docker build` local produce una imagen que no arranca.
+*.sh text eol=lf
+
+# Docker tolera CRLF en sus instrucciones, pero mantenerlo homogéneo evita diffs de ruido.
+Dockerfile text eol=lf
