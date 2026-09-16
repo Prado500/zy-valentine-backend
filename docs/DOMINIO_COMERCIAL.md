@@ -17,6 +17,7 @@ ejecutó con credenciales reales.
 | El pago se verifica en el servidor | `POST /purchases/{id}/verify` consulta al proveedor; el retorno del navegador sin `paymentId` deja la compra en `pending` |
 | Un webhook repetido no se procesa dos veces | `uq_payment_events_provider_event (provider, event_id)` |
 | Un webhook fuera de orden no revierte un pago | Rango monótono en `PAYMENT_STATUS_RANK`: un estado de rango menor se registra pero no se aplica |
+| El documento solo se pide a quien quiere factura | Opcional en `POST /auth/register`, pero completo o nada (tipo y número juntos). Sin él no se crea fila en `user_identity_documents`: la ausencia de la fila es el "no pidió factura". Nada de la compra depende de él y se puede añadir después con `PUT /me/identity-document` |
 | La cédula no es credencial ni identificador público | Tabla aparte, solo HMAC y últimos 4 dígitos; no aparece en `/me`, ni en el slug, ni en el visor público |
 
 ## 2. Estados separados

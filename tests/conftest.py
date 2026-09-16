@@ -282,9 +282,10 @@ def gateway(app):
     return fake
 
 
-# El alta es un acto legal: sin documento ni versión de términos aceptada, el
-# backend responde 422. Cada cuenta necesita ADEMÁS su propio número de
-# documento: la unicidad es global, no por correo.
+# El alta es un acto legal: sin versión de términos aceptada, el backend responde
+# 422. El documento es opcional (solo lo da quien pide factura), pero BUYER lo trae
+# para ejercitar el camino completo; y quien lo trae necesita su propio número: la
+# unicidad es global, no por correo.
 BUYER = {
     "email": "comprador@example.com",
     "password": "pw-buyer1",

@@ -1,7 +1,16 @@
 import uuid
 from datetime import datetime
+from typing import Self
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, ValidationInfo, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    EmailStr,
+    Field,
+    ValidationInfo,
+    field_validator,
+    model_validator,
+)
 
 from app.core import dian
 
@@ -25,11 +34,13 @@ class DocumentInput(Input):
 
     @field_validator("documentNumber", mode="after")
     @classmethod
-    def canonical_number(cls, value: str, info: ValidationInfo) -> str:
+    def canonical_number(cls, value: str | None, info: ValidationInfo) -> str | None:
         """El formato depende del tipo, que ya está validado cuando se llega aquí."""
         document_type = info.data.get("documentType")
-        if document_type is None:
-            # El tipo no pasó su propia validación; ese es el error que se reporta.
+        if value is None or document_type is None:
+            # Sin número no hay nada que normalizar (el alta lo admite: ver `Register`).
+            # Sin tipo, o no pasó su propia validación —ese es el error que se reporta—
+            # o falta del todo, y eso lo rechaza la regla de "completo o nada".
             return value
         return dian.normalize_number(int(document_type), value)
 
@@ -45,12 +56,36 @@ class Login(Input):
 
 
 class Register(Login, DocumentInput):
-    """Alta como acto legal: cuenta, documento y aceptación de los términos vigentes."""
+    """Alta como acto legal: cuenta y aceptación de los términos vigentes.
+
+    El documento es **opcional**. Solo lo necesita quien pide factura electrónica, y
+    exigirlo a todo el mundo en el primer paso de la compra era fricción sin
+    contrapartida. Cuando llega, valen exactamente las mismas reglas que en el panel
+    —se heredan de `DocumentInput`—; lo único que cambia es que puede no venir.
+
+    Lo que no se admite es medio documento: un tipo sin número, o al revés, no sirve
+    para facturar ni para comprobar la unicidad entre cuentas, y guardarlo sería
+    fingir un dato que no tenemos. Completo o nada.
+    """
 
     password: str = Field(min_length=4, max_length=10)
     name: str = Field(min_length=1, max_length=120)
     # Versión exacta del texto que la persona vio; el servicio la contrasta con la vigente.
     acceptedTermsVersion: str = Field(min_length=1, max_length=32)
+    documentType: dian.DocumentType | None = None
+    documentNumber: str | None = Field(
+        default=None, min_length=dian.MIN_LENGTH, max_length=dian.MAX_LENGTH
+    )
+
+    @model_validator(mode="after")
+    def whole_document_or_none(self) -> Self:
+        if (self.documentType is None) != (self.documentNumber is None):
+            raise ValueError("El documento va completo, tipo y número, o no va")
+        return self
+
+    @property
+    def has_document(self) -> bool:
+        return self.documentType is not None
 
     @field_validator("name")
     @classmethod
