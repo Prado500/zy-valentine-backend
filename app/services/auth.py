@@ -19,9 +19,9 @@ from app.schemas.auth import Login, Register
 async def register(db: AsyncSession, payload: Register, limiter: CapacityLimiter) -> User:
     """Crea el usuario y lo deja en la sesión, **sin cerrar la transacción**.
 
-    El alta ya no es solo un usuario: son usuario, documento y consentimiento, y las
-    tres cosas tienen que entrar juntas o no entrar. El ``commit`` lo hace
-    ``AccountService.register``, que es quien orquesta las tres.
+    El alta ya no es solo un usuario: son usuario, consentimiento y, si la persona
+    pidió factura, documento, y todo tiene que entrar junto o no entrar. El ``commit``
+    lo hace ``AccountService.register``, que es quien lo orquesta.
 
     El ``flush`` sí es necesario aquí: dispara la restricción única del correo en este
     punto, donde todavía sabemos que el 409 es "ese correo ya tiene cuenta". Y deja el
