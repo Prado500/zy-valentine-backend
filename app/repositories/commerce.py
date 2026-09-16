@@ -197,6 +197,13 @@ async def dedications_of_user(
 # Ninguna de las dos escrituras falla si la fila no existe (``WHERE id = 1`` sin filas es
 # un no-op). Van dentro de la transacción de un pago ya aprobado, y un contador ausente no
 # puede tumbar un cobro que el proveedor ya dio por bueno.
+#
+# ``synchronize_session=False`` porque nadie de este camino tiene el contador cargado en la
+# sesión. Con el valor por defecto, SQLAlchemy intenta reflejar el cambio en el mapa de
+# identidad; ``greatest()`` no sabe evaluarlo en Python, así que recurre a expirar el
+# objeto, y leerlo después en código asíncrono revienta con ``MissingGreenlet``. Hoy no
+# ocurre, pero es la mina que pisaría el primero que lea el contador y lo decremente en la
+# misma sesión.
 
 
 async def slot_counter(db: AsyncSession) -> CampaignSlots | None:
@@ -209,6 +216,7 @@ async def consume_slot(db: AsyncSession) -> None:
         update(CampaignSlots)
         .where(CampaignSlots.id == 1)
         .values(sold=CampaignSlots.sold + 1)
+        .execution_options(synchronize_session=False)
     )
 
 
@@ -220,4 +228,5 @@ async def release_slot(db: AsyncSession) -> None:
         # greatest(): el CHECK de la tabla prohíbe negativos, y preferimos un contador
         # clavado en 0 antes que un reembolso que revienta por aritmética.
         .values(sold=func.greatest(CampaignSlots.sold - 1, 0))
+        .execution_options(synchronize_session=False)
     )

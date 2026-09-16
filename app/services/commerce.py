@@ -441,11 +441,18 @@ class CommerceService:
         `max(..., 0)` no es paranoia de más. El contador es informativo y no frena ningún
         cobro (ver `CampaignSlots`), así que la sobreventa es posible por diseño; cuando
         ocurra, la landing debe decir "0 disponibles" y no un número negativo.
+
+        Sin fila se responde 503 y **no** tres ceros. Un contador que no está es una avería
+        nuestra, no un hecho comercial: devolver `remaining: 0` sería anunciar "agotado" en
+        toda la landing, en silencio y con un 200 que el frontend no tiene forma de
+        distinguir de la verdad. Con el 503 cae en su cifra de respaldo, que es lo que hace
+        ante cualquier otro fallo.
         """
         counter = await repo.slot_counter(self.db)
-        total = counter.total if counter else 0
-        sold = counter.sold if counter else 0
-        return SlotsResponse(total=total, taken=sold, remaining=max(total - sold, 0))
+        if counter is None:
+            raise ApiError(503, "SLOTS_UNAVAILABLE", "No hay contador de cupos configurado.")
+        remaining = max(counter.total - counter.sold, 0)
+        return SlotsResponse(total=counter.total, taken=counter.sold, remaining=remaining)
 
     def health(self) -> CommerceHealth:
         """Diagnóstico sin secretos: qué integraciones están **activas**.

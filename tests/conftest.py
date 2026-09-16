@@ -192,8 +192,16 @@ async def app(settings, migrated_database):
             # campaign_slots NO se trunca: es una fila única que crea la migración, y
             # borrarla dejaría sin contador a todas las pruebas siguientes. Se rebobina,
             # porque el TRUNCATE de arriba se lleva las compras pero no baja `sold`.
+            #
+            # Es un upsert y no un UPDATE porque un UPDATE no puede devolver lo que no
+            # está: a la primera prueba que borre la fila —o a una base restaurada a
+            # medias— le seguiría toda la suite sin contador, y el rebobinado no lo
+            # arreglaría nunca, ni siquiera entre ejecuciones distintas de pytest.
             await conn.execute(
-                text("UPDATE campaign_slots SET total = :total, sold = :sold WHERE id = 1"),
+                text(
+                    "INSERT INTO campaign_slots (id, total, sold) VALUES (1, :total, :sold) "
+                    "ON CONFLICT (id) DO UPDATE SET total = :total, sold = :sold"
+                ),
                 {"total": SLOTS_TOTAL, "sold": SLOTS_SEED_SOLD},
             )
         yield instance

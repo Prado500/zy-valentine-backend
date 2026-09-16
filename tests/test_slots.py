@@ -7,7 +7,9 @@ que se está verificando es el movimiento, no el punto de partida.
 """
 
 import asyncio
+import pathlib
 
+import pytest
 from sqlalchemy import select, text
 
 from app.models.commerce import SLOTS_SEED_SOLD, SLOTS_TOTAL, CampaignSlots
@@ -40,8 +42,38 @@ async def test_slots_are_public_and_need_no_session(client):
 
 
 async def test_seed_keeps_the_number_the_landing_already_showed(client):
-    """La semilla existe para que el número público no salte el día del despliegue."""
+    """La semilla existe para que el número público no salte el día del despliegue.
+
+    Contra literales y no contra `SLOTS_TOTAL`/`SLOTS_SEED_SOLD`: el rebobinado del
+    `conftest` escribe esas constantes, así que compararlas consigo mismas no probaría
+    nada. 8.364 es la cifra que la landing enseñaba escrita a mano, y el día que alguien
+    cambie la semilla de la migración esta prueba tiene que ser la que se queje.
+    """
     assert (await read_slots(client))["remaining"] == 8364
+
+
+async def test_model_constants_match_the_migration_seed():
+    """La migración lleva los literales a pelo (no importa `app.models`): que no diverjan."""
+    migration = (
+        pathlib.Path(__file__).resolve().parent.parent
+        / "alembic"
+        / "versions"
+        / "0004_campaign_slots.py"
+    ).read_text()
+    assert f"values (1, {SLOTS_TOTAL}, {SLOTS_SEED_SOLD})" in migration
+
+
+async def test_missing_counter_row_is_an_outage_not_a_sellout(client, app):
+    """Sin fila no se responde "agotado": se responde 503 y el front usa su respaldo.
+
+    Tres ceros con un 200 son indistinguibles de la verdad para quien pinta la landing,
+    y anunciarían que no quedan cupos por una avería nuestra.
+    """
+    async with app.state.engine.begin() as conn:
+        await conn.execute(text("DELETE FROM campaign_slots WHERE id = 1"))
+    response = await client.get("/api/v1/public/slots")
+    assert response.status_code == 503
+    assert response.json()["code"] == "SLOTS_UNAVAILABLE"
 
 
 # --- El evento: una compra pagada resta un cupo ---------------------------------------
@@ -77,8 +109,9 @@ async def test_webhook_consumes_one_and_only_once(client, gateway, buyer, app):
 async def test_webhook_after_verify_does_not_consume_a_second_slot(client, gateway, buyer, app):
     """Los dos caminos confirman el mismo pago: el cupo se gasta una vez, no dos.
 
-    Es la prueba que falla si `lock_purchase` devuelve la compra obsoleta del mapa de
-    identidad: el webhook volvería a ver `pending` y descontaría otra vez.
+    Son peticiones secuenciales y con sesiones distintas, así que la del webhook carga la
+    compra ya `paid` desde la base. Esto cubre la idempotencia entre caminos; quien cubre
+    el objeto obsoleto del mapa de identidad es la prueba de repositorio de más abajo.
     """
     before = await sold(app)
     purchase = await new_purchase(client)
@@ -183,8 +216,13 @@ async def test_rejected_payment_does_not_consume(client, gateway, buyer, app):
     assert await sold(app) == before
 
 
-async def test_amount_mismatch_rolls_back_the_decrement(client, gateway, buyer, app):
-    """Un pago por menos de lo debido aborta con 409 y no deja el contador tocado."""
+async def test_amount_mismatch_never_reaches_the_decrement(client, gateway, buyer, app):
+    """Un pago por menos de lo debido aborta con 409 y no deja el contador tocado.
+
+    El nombre es literal: la comprobación de importe corta **antes** de tocar el contador,
+    así que aquí no hay ningún rollback que observar. La atomicidad de verdad —descuento y
+    estado deshechos juntos— la cubre `test_failed_commit_undoes_the_decrement`.
+    """
     before = await sold(app)
     purchase = await new_purchase(client)
     gateway.approve("930600", purchase["externalReference"], purchase["amountCents"] - 1)
@@ -209,3 +247,74 @@ async def test_oversold_counter_reads_zero_and_never_negative(client, app):
     body = await read_slots(client)
     assert body["remaining"] == 0
     assert body["taken"] == body["total"] + 5
+
+
+# --- Atomicidad y frescura del objeto bloqueado ---------------------------------------
+
+
+async def test_failed_commit_undoes_the_decrement(client, gateway, buyer, app, monkeypatch):
+    """Si el commit falla, el cupo no se va: descuento y estado se deshacen juntos.
+
+    Es la propiedad que sostiene todo el diseño —mover el contador dentro de la misma
+    transacción que el paso a `paid`— y hasta ahora no la comprobaba nadie.
+    """
+    from sqlalchemy.exc import IntegrityError
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    from app.core.errors import ApiError
+    from app.repositories import commerce as repo
+    from app.services import purchases as purchases_service
+    from app.services.payments import PaymentSnapshot
+
+    purchase_json = await new_purchase(client)
+    before = await sold(app)
+
+    original = AsyncSession.commit
+
+    async def exploding_commit(self):
+        # Solo revienta el primer commit: el rollback posterior debe poder trabajar.
+        monkeypatch.setattr(AsyncSession, "commit", original)
+        raise IntegrityError("boom", None, Exception("conflicto simulado"))
+
+    monkeypatch.setattr(AsyncSession, "commit", exploding_commit)
+
+    async with app.state.sessions() as db:
+        purchase = await repo.purchase_by_reference(db, purchase_json["externalReference"])
+        snapshot = PaymentSnapshot(
+            provider_payment_id="940001",
+            status="approved",
+            status_detail="accredited",
+            amount_cents=purchase_json["amountCents"],
+            currency=purchase_json["currency"],
+            external_reference=purchase_json["externalReference"],
+        )
+        with pytest.raises(ApiError) as failure:
+            await purchases_service.apply_snapshot(db, purchase, snapshot)
+        assert failure.value.status_code == 409
+
+    assert await sold(app) == before
+    state = await client.get(f"/api/v1/purchases/{purchase_json['id']}")
+    assert state.json()["status"] == "pending"
+
+
+async def test_lock_purchase_sees_what_another_session_just_committed(client, gateway, buyer, app):
+    """El objeto bloqueado tiene que venir fresco, no del mapa de identidad.
+
+    Reproduce la carrera de forma determinista y sin depender del entrelazado: una sesión
+    carga la compra en `pending`, otra la confirma y cierra, y la primera la bloquea. Sin
+    `populate_existing` en `lock_purchase`, aquí se seguiría leyendo `pending` y el
+    contador se descontaría por segunda vez.
+    """
+    from app.repositories import commerce as repo
+
+    purchase_json = await new_purchase(client)
+
+    async with app.state.sessions() as first:
+        stale = await repo.purchase_by_reference(first, purchase_json["externalReference"])
+        assert stale.status == "pending"
+
+        # Otra sesión confirma el pago y cierra su transacción.
+        await pay(client, gateway, purchase_json, payment_id="940002")
+
+        locked = await repo.lock_purchase(first, stale.id)
+        assert locked.status == "paid", "lock_purchase devolvió el objeto obsoleto"
