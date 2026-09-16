@@ -42,10 +42,16 @@ class AccountService:
     async def register(
         self, payload: Register, ip: str | None = None, user_agent: str | None = None
     ) -> User:
-        """Usuario, documento y consentimiento en una sola transacción.
+        """Usuario, consentimiento y —si la persona pidió factura— documento, en una sola
+        transacción.
 
         Si esto se partiera en dos commits podría quedar una cuenta sin consentimiento,
         que no es un fallo parcial aceptable: es un incumplimiento de la Ley 1581.
+
+        Sin documento no se crea ninguna fila en `user_identity_documents`, ni vacía ni de
+        relleno: la ausencia de la fila **es** el "no pidió factura". Nada del flujo de
+        compra depende de ella, y si más adelante lo necesita puede añadirlo desde
+        `PUT /me/identity-document`.
 
         **Orden deliberado:** el correo se comprueba primero, dentro de ``auth.register``.
         Así un correo repetido sigue devolviendo ``EMAIL_IN_USE``, que es lo que el
@@ -53,9 +59,10 @@ class AccountService:
         documento, el código es ``REGISTRATION_CONFLICT`` y el frontend no intenta entrar.
         """
         user = await auth.register(self.db, payload, self.hash_limiter)
-        await identity.attach_document(
-            self.db, self.settings, user, payload.documentType, payload.documentNumber
-        )
+        if payload.has_document:
+            await identity.attach_document(
+                self.db, self.settings, user, payload.documentType, payload.documentNumber
+            )
         consents.attach_consent(self.db, user, payload.acceptedTermsVersion, ip, user_agent)
         try:
             await self.db.commit()

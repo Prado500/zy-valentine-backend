@@ -19,7 +19,7 @@ from app.core import crypto, dian
 from app.models.commerce import UserConsent, UserIdentityDocument
 from app.models.user import User
 from app.services.identity import document_fingerprint
-from tests.conftest import BUYER
+from tests.conftest import BUYER, new_purchase, pay
 
 REGISTER = "/api/v1/auth/register"
 DOCUMENT = "/api/v1/me/identity-document"
@@ -59,14 +59,26 @@ async def test_register_stores_dian_code_and_proof_of_consent(client, app):
 # 2. Caminos tristes -----------------------------------------------------------------
 
 
-@pytest.mark.parametrize("missing", ["acceptedTermsVersion", "documentType", "documentNumber"])
-async def test_register_without_a_legal_field_creates_nothing(client, app, missing):
+async def test_register_without_consent_creates_nothing(client, app):
+    """El consentimiento sí es obligatorio siempre: es lo que exige la Ley 1581."""
+    body = payload()
+    del body["acceptedTermsVersion"]
+    response = await client.post(REGISTER, json=body)
+    assert response.status_code == 422
+    assert response.json()["code"] == "VALIDATION_ERROR"
+    assert await rows(app, User) == []
+
+
+@pytest.mark.parametrize("missing", ["documentType", "documentNumber"])
+async def test_half_a_document_creates_nothing(client, app, missing):
+    """El documento es opcional, pero completo o nada: medio no sirve para facturar."""
     body = payload()
     del body[missing]
     response = await client.post(REGISTER, json=body)
     assert response.status_code == 422
     assert response.json()["code"] == "VALIDATION_ERROR"
     assert await rows(app, User) == []
+    assert await rows(app, UserIdentityDocument) == []
 
 
 async def test_register_with_stale_terms_version_is_rejected(client, app):
@@ -142,6 +154,72 @@ async def test_concurrent_registration_with_same_document_keeps_one(client, app)
     assert len(await rows(app, User)) == 1
     assert len(await rows(app, UserIdentityDocument)) == 1
     assert len(await rows(app, UserConsent)) == 1
+
+
+# 4 bis. Documento opcional: solo lo da quien pide factura ------------------------------
+
+
+def without_document(**changes):
+    body = payload(**changes)
+    del body["documentType"], body["documentNumber"]
+    return body
+
+
+@pytest.mark.parametrize(
+    "body",
+    [without_document(), {**without_document(), "documentType": None, "documentNumber": None}],
+    ids=["claves-omitidas", "nulos-explicitos"],
+)
+async def test_register_without_document_creates_account_and_consent_only(client, app, body):
+    """Sin factura: cuenta y consentimiento, y **ninguna** fila de documento.
+
+    El frontend omite las claves; un cliente que mande `null` explícito significa lo
+    mismo y recibe lo mismo.
+    """
+    response = await client.post(REGISTER, json=body)
+    assert response.status_code == 201, response.text
+    (user,) = await rows(app, User)
+    (consent,) = await rows(app, UserConsent)
+    assert consent.user_id == user.id
+    assert await rows(app, UserIdentityDocument) == []
+
+
+async def login_without_document(client, email="sin-factura@example.com"):
+    body = without_document(email=email)
+    assert (await client.post(REGISTER, json=body)).status_code == 201
+    response = await client.post(
+        "/api/v1/auth/login", json={"email": email, "password": body["password"]}
+    )
+    assert response.status_code == 200
+
+
+async def test_account_without_document_can_add_it_later(client, app):
+    """Quien no pidió factura al darse de alta puede dar su documento desde el panel."""
+    await login_without_document(client)
+    assert (await client.get(DOCUMENT)).status_code == 404
+
+    added = await client.put(DOCUMENT, json={"documentType": 13, "documentNumber": "1077700001"})
+    assert added.status_code == 200, added.text
+    (document,) = await rows(app, UserIdentityDocument)
+    assert document.document_last4 == "0001"
+    assert (await client.get(DOCUMENT)).json()["documentLast4"] == "0001"
+
+
+async def test_account_without_document_can_buy(client, app, gateway):
+    """Nada del flujo de compra depende del documento: se compra y se paga sin él."""
+    await login_without_document(client)
+    purchase = await new_purchase(client)
+    verified = await pay(client, gateway, purchase)
+    assert verified["purchase"]["status"] == "paid"
+    assert await rows(app, UserIdentityDocument) == []
+
+
+async def test_document_given_at_registration_still_blocks_a_second_account(client, app):
+    """Opcional no relaja la unicidad: quien sí lo da, lo da una sola vez."""
+    assert (await client.post(REGISTER, json=payload())).status_code == 201
+    again = await client.post(REGISTER, json=payload(email="otra-mas@example.com"))
+    assert again.status_code == 409
+    assert again.json()["code"] == "REGISTRATION_CONFLICT"
 
 
 # 5. Excepción a mitad de la transacción -----------------------------------------------

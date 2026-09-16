@@ -359,7 +359,7 @@ Lo que hace el código hoy, no el modelo de `Iops.md`. Escrituras = transaccione
 
 | Etapa | Qué hace en el código | Escrituras | Lecturas |
 | --- | --- | --- | --- |
-| 1 · Registro | `auth.register` — usuario, documento y consentimiento en **una** transacción, más `new_session` | 2 | 1 |
+| 1 · Registro | `auth.register` — usuario, consentimiento y documento (si pidió factura) en **una** transacción, más `new_session` | 2 | 1 |
 | 2 · Crear compra | `purchases.create_intent` — `pg_insert(Purchase)`; antes llama a Mercado Pago por HTTP | 1 | 2 |
 | 3 · Pago en Mercado Pago | fuera de la infraestructura propia | 0 | 0 |
 | 4 · Verificar pago | `apply_snapshot` — `SELECT … FOR UPDATE`, alta del pago, compra a `paid` | 1 | 7 |
