@@ -2,10 +2,11 @@
 
 import uuid
 
-from sqlalchemy import Select, or_, select
+from sqlalchemy import Select, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.commerce import (
+    CampaignSlots,
     Letter,
     LetterDelivery,
     LetterPhoto,
@@ -47,8 +48,22 @@ async def owned_purchase(
 
 
 async def lock_purchase(db: AsyncSession, purchase_id: uuid.UUID) -> Purchase | None:
-    """Bloqueo transaccional: dos pestañas o un doble clic se serializan aquí."""
-    return await db.scalar(select(Purchase).where(Purchase.id == purchase_id).with_for_update())
+    """Bloqueo transaccional: dos pestañas o un doble clic se serializan aquí.
+
+    ``populate_existing`` no es decorativo. Quien llama ya cargó la compra antes (el
+    webhook con ``purchase_by_reference``, la verificación con ``owned_purchase``), así
+    que está en el mapa de identidad de la sesión; y la fábrica usa
+    ``expire_on_commit=False``. Sin esta opción, SQLAlchemy **no** sobrescribe los
+    atributos ya cargados: la sesión que espera el ``FOR UPDATE`` obtendría el bloqueo
+    después de que la otra confirmara ``paid`` y seguiría leyendo ``pending`` en Python.
+    Las guardas de estado de ``apply_snapshot`` dependen de que ese objeto sea fresco.
+    """
+    return await db.scalar(
+        select(Purchase)
+        .where(Purchase.id == purchase_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
 
 
 async def purchases_of_user(db: AsyncSession, user_id: uuid.UUID) -> list[Purchase]:
@@ -171,3 +186,38 @@ async def dedications_of_user(
 ) -> list[tuple[Purchase, Letter | None]]:
     result = await db.execute(dedications_statement(user_id))
     return [(purchase, letter) for purchase, letter in result.all()]
+
+
+# --- Cupos de la campaña -------------------------------------------------------------
+#
+# El contador se mueve con ``UPDATE ... sold = sold + 1`` a nivel de SQL, nunca leyendo a
+# Python y reescribiendo: así dos transacciones concurrentes se serializan solas en la
+# fila y ninguna pisa el incremento de la otra.
+#
+# Ninguna de las dos escrituras falla si la fila no existe (``WHERE id = 1`` sin filas es
+# un no-op). Van dentro de la transacción de un pago ya aprobado, y un contador ausente no
+# puede tumbar un cobro que el proveedor ya dio por bueno.
+
+
+async def slot_counter(db: AsyncSession) -> CampaignSlots | None:
+    return await db.get(CampaignSlots, 1)
+
+
+async def consume_slot(db: AsyncSession) -> None:
+    """Resta un cupo. Se llama al confirmarse un pago."""
+    await db.execute(
+        update(CampaignSlots)
+        .where(CampaignSlots.id == 1)
+        .values(sold=CampaignSlots.sold + 1)
+    )
+
+
+async def release_slot(db: AsyncSession) -> None:
+    """Devuelve un cupo. Se llama si un pago ya confirmado acaba reembolsado."""
+    await db.execute(
+        update(CampaignSlots)
+        .where(CampaignSlots.id == 1)
+        # greatest(): el CHECK de la tabla prohíbe negativos, y preferimos un contador
+        # clavado en 0 antes que un reembolso que revienta por aritmética.
+        .values(sold=func.greatest(CampaignSlots.sold - 1, 0))
+    )

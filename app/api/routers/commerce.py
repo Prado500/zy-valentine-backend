@@ -36,6 +36,7 @@ from app.schemas.commerce import (
     PurchaseResponse,
     PurchaseVerification,
     ResendInput,
+    SlotsResponse,
 )
 from app.services.commerce import BinaryContent, CommerceService
 
@@ -371,6 +372,12 @@ async def letter_postcard(
 
 
 # --- Visor público (sin sesión, sin datos personales del comprador) ------------------
+
+
+@public_router.get("/slots", response_model=SlotsResponse)
+async def public_slots(service: CommerceService = Depends(commerce_service)):
+    """Cupos restantes de la campaña. Sin sesión ni CSRF: lo pide la landing al cargar."""
+    return await service.slots()
 
 
 @public_router.get("/letters/{slug}", response_model=PublicLetterResponse)

@@ -56,6 +56,7 @@ from app.schemas.commerce import (
     PurchaseResponse,
     PurchaseVerification,
     ResendInput,
+    SlotsResponse,
     TempPhotoRef,
 )
 from app.services import dedications, deliveries, identity, letters, purchases, webhooks
@@ -433,6 +434,18 @@ class CommerceService:
         letter = await self._published_letter(slug)
         content = await self._card(letter, letters.public_url(self.settings, letter))
         return content._replace(cache_control=FROZEN_CACHE)
+
+    async def slots(self) -> SlotsResponse:
+        """Cupos de la campaña. Sin sesión: lo pinta la landing antes de que nadie entre.
+
+        `max(..., 0)` no es paranoia de más. El contador es informativo y no frena ningún
+        cobro (ver `CampaignSlots`), así que la sobreventa es posible por diseño; cuando
+        ocurra, la landing debe decir "0 disponibles" y no un número negativo.
+        """
+        counter = await repo.slot_counter(self.db)
+        total = counter.total if counter else 0
+        sold = counter.sold if counter else 0
+        return SlotsResponse(total=total, taken=sold, remaining=max(total - sold, 0))
 
     def health(self) -> CommerceHealth:
         """Diagnóstico sin secretos: qué integraciones están **activas**.

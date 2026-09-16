@@ -112,6 +112,7 @@ os.environ["LOCAL_STORAGE_DIR"] = tempfile.mkdtemp(prefix="zy-storage-")
 from app import legal  # noqa: E402
 from app.core.config import Settings  # noqa: E402
 from app.main import EXPECTED_REVISION, create_app  # noqa: E402
+from app.models.commerce import SLOTS_SEED_SOLD, SLOTS_TOTAL  # noqa: E402
 
 # Variables que este conftest controla a propósito; el resto no debe filtrarse.
 CONTROLLED_ENV = {"DATABASE_URL", "APP_ENV", "DB_SSL_MODE", "SESSION_SECRET", "LOCAL_STORAGE_DIR"}
@@ -188,6 +189,13 @@ async def app(settings, migrated_database):
                 )
             # payment_events no referencia a users: se limpia explícitamente.
             await conn.execute(text("TRUNCATE users, payment_events CASCADE"))
+            # campaign_slots NO se trunca: es una fila única que crea la migración, y
+            # borrarla dejaría sin contador a todas las pruebas siguientes. Se rebobina,
+            # porque el TRUNCATE de arriba se lleva las compras pero no baja `sold`.
+            await conn.execute(
+                text("UPDATE campaign_slots SET total = :total, sold = :sold WHERE id = 1"),
+                {"total": SLOTS_TOTAL, "sold": SLOTS_SEED_SOLD},
+            )
         yield instance
 
 

@@ -256,6 +256,18 @@ class PublicLetterResponse(BaseModel):
     publishedAt: datetime
 
 
+class SlotsResponse(BaseModel):
+    """Cupos de la campaña, tal y como los pinta la landing.
+
+    `taken` y `remaining` se derivan, no se guardan: la base solo tiene `total` y `sold`, y
+    dos cifras que deben cuadrar entre sí es una que sobra.
+    """
+
+    total: int
+    taken: int
+    remaining: int
+
+
 class CommerceHealth(BaseModel):
     """Diagnóstico de integraciones. Nombres de modo, nunca credenciales ni URLs."""
 

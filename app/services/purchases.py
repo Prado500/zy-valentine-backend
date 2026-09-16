@@ -117,10 +117,23 @@ async def apply_snapshot(
         payment.amount_cents = snapshot.amount_cents
     # Un webhook antiguo (rank menor) se registra pero no revierte el estado vigente.
 
+    # Aquí, y solo aquí, una compra pasa a `paid`: por este camino entran tanto
+    # `/purchases/{id}/verify` como el webhook. Por eso el contador de cupos se mueve en
+    # esta misma rama y no hace falta ningún bus de eventos: el `FOR UPDATE` de arriba
+    # serializa a los dos, y la guarda `!= "paid"` es el borde exacto de la transición,
+    # así que el descuento ocurre **una sola vez** por compra. Va en la misma transacción
+    # que el cambio de estado: si el commit de abajo falla, el `rollback` deshace las dos
+    # cosas a la vez y nunca queda una compra pagada con el contador sin bajar.
     if payment.status == "approved" and locked.status != "paid":
         locked.status = "paid"
         locked.paid_at = datetime.now(UTC)
+        await commerce.consume_slot(db)
     elif payment.status in ("refunded", "charged_back"):
+        # Solo devuelve cupo lo que llegó a consumirlo. Un reembolso sobre una compra que
+        # nunca estuvo pagada —o el segundo reembolso del mismo pago, que ya la encuentra
+        # `cancelled`— no puede regalar un cupo que nadie gastó.
+        if locked.status == "paid":
+            await commerce.release_slot(db)
         locked.status = "cancelled"
     try:
         await db.commit()

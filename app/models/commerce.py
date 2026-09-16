@@ -17,6 +17,7 @@ Reglas garantizadas por la base de datos, no solo por el servicio:
 - ``uq_letter_photos_position``: orden de fotos estable y sin duplicados.
 - ``ck_document_type``: el tipo de documento es uno de los nueve códigos DIAN.
 - ``uq_consent_user_kind_version``: una sola aceptación por persona, documento y versión.
+- ``ck_campaign_slots_singleton``: el contador de cupos es una fila y solo una.
 """
 
 import uuid
@@ -278,4 +279,42 @@ class LetterDelivery(Base):
     )
     __table_args__ = (
         CheckConstraint("status in ('pending','sent','failed')", name="ck_delivery_status"),
+    )
+
+
+# --- Cupos de la campaña -------------------------------------------------------------
+
+#: Cupos activados a nivel nacional.
+SLOTS_TOTAL = 10000
+#: Cupos ya tomados con los que nace la fila. Es la cifra que la landing venía mostrando
+#: escrita a mano (10000 - 8364): arrancar en 0 haría saltar el número público de 8.364 a
+#: 10.000 el día del despliegue. Desde esta base solo lo mueven ventas reales.
+SLOTS_SEED_SOLD = 1636
+
+
+class CampaignSlots(Base):
+    """Contador de cupos de la campaña. Una sola fila, siempre ``id = 1``.
+
+    Es un **contador**, no una reserva: nadie sostiene un cupo mientras paga. Se resta al
+    confirmarse el pago (ver ``app.services.purchases.apply_snapshot``, el único punto
+    donde una compra pasa a ``paid``) y se devuelve si ese pago acaba reembolsado.
+
+    No hay ``CHECK (sold <= total)`` a propósito. El contador es informativo: un pago que
+    el proveedor ya aprobó jamás puede fallar porque la cifra se pasara de la raya —
+    cobrar y devolver un 500 es mucho peor que enseñar un cupo de más. Si llegara a
+    sobrevenderse, la lectura lo absorbe con ``max(total - sold, 0)`` y muestra 0.
+    """
+
+    __tablename__ = "campaign_slots"
+    id: Mapped[int] = mapped_column(SmallInteger, primary_key=True, autoincrement=False)
+    total: Mapped[int] = mapped_column(Integer)
+    sold: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+    __table_args__ = (
+        # La fila única la garantiza la base, no el servicio: sin esto, un INSERT
+        # despistado crearía un segundo contador y las dos cifras divergirían en silencio.
+        CheckConstraint("id = 1", name="ck_campaign_slots_singleton"),
+        CheckConstraint("sold >= 0 and total >= 0", name="ck_campaign_slots_counts"),
     )

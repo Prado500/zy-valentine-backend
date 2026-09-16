@@ -17,6 +17,8 @@ ejecutó con credenciales reales.
 | El pago se verifica en el servidor | `POST /purchases/{id}/verify` consulta al proveedor; el retorno del navegador sin `paymentId` deja la compra en `pending` |
 | Un webhook repetido no se procesa dos veces | `uq_payment_events_provider_event (provider, event_id)` |
 | Un webhook fuera de orden no revierte un pago | Rango monótono en `PAYMENT_STATUS_RANK`: un estado de rango menor se registra pero no se aplica |
+| Una compra pagada resta exactamente un cupo | El descuento vive en la misma rama y la misma transacción que el paso a `paid` (`purchases.apply_snapshot`), que es el único punto donde ocurre; `SELECT … FOR UPDATE` con `populate_existing` serializa verificación y webhook |
+| El contador de cupos nunca tumba un cobro | Sin `CHECK (sold <= total)`: un pago ya aprobado por el proveedor no puede fallar por la cifra. La sobreventa se absorbe al leer con `max(total - sold, 0)` |
 | La cédula no es credencial ni identificador público | Tabla aparte, solo HMAC y últimos 4 dígitos; no aparece en `/me`, ni en el slug, ni en el visor público |
 
 ## 2. Estados separados
@@ -45,6 +47,14 @@ un reembolso posterior no borra la carta ya publicada.
   (aleatorio, 16 bytes), `published_version`.
 - `letter_photos` — `uq_letter_photos_position (letter_id, position)`.
 - `letter_deliveries` — un intento por fila, con `attempts`, `letter_version` y `last_error`.
+
+Migración `0004_campaign_slots`:
+
+- `campaign_slots` — fila única (`ck_campaign_slots_singleton`: `id = 1`) con `total` y `sold`.
+  Nace sembrada en `(10000, 1636)`, que es la cifra que la landing mostraba escrita a mano
+  (quedaban 8.364): arrancar en 0 haría saltar el número público el día del despliegue.
+  Se resta al confirmarse un pago y se devuelve si ese pago acaba reembolsado.
+  Lo sirve `GET /api/v1/public/slots`, sin sesión.
 
 ## 4. Flujo, mapeado a `Iops.md`
 
