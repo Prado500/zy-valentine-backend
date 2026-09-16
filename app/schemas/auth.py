@@ -1,5 +1,6 @@
 import uuid
 from datetime import datetime
+from typing import Self
 
 from pydantic import (
     BaseModel,
@@ -77,7 +78,7 @@ class Register(Login, DocumentInput):
     )
 
     @model_validator(mode="after")
-    def whole_document_or_none(self) -> "Register":
+    def whole_document_or_none(self) -> Self:
         if (self.documentType is None) != (self.documentNumber is None):
             raise ValueError("El documento va completo, tipo y número, o no va")
         return self

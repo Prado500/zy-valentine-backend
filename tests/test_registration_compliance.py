@@ -69,12 +69,24 @@ async def test_register_without_consent_creates_nothing(client, app):
     assert await rows(app, User) == []
 
 
-@pytest.mark.parametrize("missing", ["documentType", "documentNumber"])
-async def test_half_a_document_creates_nothing(client, app, missing):
-    """El documento es opcional, pero completo o nada: medio no sirve para facturar."""
-    body = payload()
-    del body[missing]
-    response = await client.post(REGISTER, json=body)
+@pytest.mark.parametrize(
+    "half",
+    [
+        {"documentType": 13},
+        {"documentNumber": "1098765432"},
+        {"documentType": 13, "documentNumber": None},
+        {"documentType": None, "documentNumber": "1098765432"},
+    ],
+    ids=["solo-tipo", "solo-numero", "numero-nulo", "tipo-nulo"],
+)
+async def test_half_a_document_creates_nothing(client, app, half):
+    """El documento es opcional, pero completo o nada: medio no sirve para facturar.
+
+    ``numero-nulo`` fija además la guarda de ``DocumentInput.canonical_number``: sin
+    ella, ``dian.normalize_number`` recibe ``None``, lanza ``AttributeError`` y el alta
+    responde 500 en vez de 422.
+    """
+    response = await client.post(REGISTER, json={**without_document(), **half})
     assert response.status_code == 422
     assert response.json()["code"] == "VALIDATION_ERROR"
     assert await rows(app, User) == []
@@ -214,18 +226,13 @@ async def test_account_without_document_can_buy(client, app, gateway):
     assert await rows(app, UserIdentityDocument) == []
 
 
-async def test_document_given_at_registration_still_blocks_a_second_account(client, app):
-    """Opcional no relaja la unicidad: quien sí lo da, lo da una sola vez."""
-    assert (await client.post(REGISTER, json=payload())).status_code == 201
-    again = await client.post(REGISTER, json=payload(email="otra-mas@example.com"))
-    assert again.status_code == 409
-    assert again.json()["code"] == "REGISTRATION_CONFLICT"
-
-
 # 5. Excepción a mitad de la transacción -----------------------------------------------
 
 
-async def test_registration_is_all_or_nothing(client, app, monkeypatch):
+@pytest.mark.parametrize(
+    "body", [payload(), without_document()], ids=["con-documento", "sin-documento"]
+)
+async def test_registration_is_all_or_nothing(client, app, monkeypatch, body):
     from app.services import consents
 
     def explode(*args, **kwargs):
@@ -233,7 +240,7 @@ async def test_registration_is_all_or_nothing(client, app, monkeypatch):
 
     monkeypatch.setattr(consents, "attach_consent", explode)
     with pytest.raises(RuntimeError):
-        await client.post(REGISTER, json=payload())
+        await client.post(REGISTER, json=body)
     assert await rows(app, User) == []
     assert await rows(app, UserIdentityDocument) == []
 

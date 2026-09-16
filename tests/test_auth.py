@@ -10,7 +10,8 @@ from app import legal
 from app.core.errors import ApiError
 from app.models.user import AuthSession, User
 
-# El alta exige documento y consentimiento; ver tests/test_registration_compliance.py.
+# El alta exige consentimiento; el documento es opcional pero, si llega, completo.
+# Ver tests/test_registration_compliance.py.
 ACCOUNT = {
     "email": "buyer@example.com",
     "password": "pw-buyer1",
